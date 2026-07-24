@@ -1,0 +1,20 @@
+[webconfig]
+www_root = "./wwwroot"
+http_port = 19798
+https_port = 19799
+enable_https = true
+webdav_root = "/"
+webdav_readonly = false
+webdav_enable_guest = false
+
+[[mount_points]]
+name = "CloudDrive"
+source_path = "/"
+mount_point = "/CloudNAS/CloudDrive"
+read_only = false
+uid = 0
+gid = 0
+permission = "777"
+local_mount = false
+auto_mount = true
+

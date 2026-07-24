@@ -1,0 +1,22 @@
+# Never commit credentials or exact server backups.
+private/
+secrets/
+*.age
+*.part-*
+*.tar
+*.tar.gz
+.env
+.env.private
+client_secret*.json
+token.json
+oauth-output.log
+emby_token.txt
+*.lic
+StrmAssistantPro.dll
+strm-assistant-import/
+
+# Runtime state must stay on the server.
+runtime/
+backup-output/
+__pycache__/
+*.pyc

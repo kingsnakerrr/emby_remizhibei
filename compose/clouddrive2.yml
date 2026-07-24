@@ -1,0 +1,19 @@
+services:
+  cd2:
+    image: cloudnas/clouddrive2@sha256:2e5e4cf81c522a045645003af494eb7517e3748c03e4249afd5b47da03fdb7c2
+    container_name: cd2
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+      - CLOUDDRIVE_HOME=/Config
+    volumes:
+      - /root/docker-compose/clouddrive2/config:/Config
+      - /home:/home:shared
+      - /CloudNAS:/CloudNAS:shared
+    network_mode: host
+    pid: host
+    privileged: true
+    devices:
+      - /dev/fuse:/dev/fuse
+    security_opt:
+      - label=disable

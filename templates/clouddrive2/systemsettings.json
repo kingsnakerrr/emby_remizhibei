@@ -1,0 +1,32 @@
+{
+  "dir_cache_ttl_secs": 3600,
+  "max_preprocess_tasks": 2,
+  "max_process_tasks": 2,
+  "read_downloader_timeout_secs": 90,
+  "sync_with_cloud": true,
+  "overwrite_old_cloud_data": false,
+  "upload_delay_secs": 10,
+  "process_black_list": [],
+  "max_download_speed_kbyps": 0.0,
+  "max_upload_speed_kbyps": 0.0,
+  "default_115_client_platform_string": "linux",
+  "upload_ignored_extensions": [],
+  "update_channel": "Release",
+  "file_log_level": "Error",
+  "backup_log_level": "Info",
+  "terminal_log_level": "Error",
+  "realtime_log_level": "Info",
+  "dir_cache_persistence": true,
+  "operator_priority_order": [
+    "Mount",
+    "Backup",
+    "CopyTask",
+    "RemoteUpload"
+  ],
+  "housekeeper_start_delay_secs": 0,
+  "file_buffer_disk_cache_max_bytes": 21474836480,
+  "file_buffer_disk_cache_eviction_strategy": "Lru",
+  "max_file_log_files": 10,
+  "max_backup_log_files": 10
+}
+

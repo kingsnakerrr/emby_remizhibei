@@ -1,0 +1,21 @@
+services:
+  emby:
+    image: amilys/embyserver@sha256:9f6af16cabc5817841c3fbefbf869101829aa406c020e9f33ec5802715b745bf
+    container_name: emby
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - "8096:8096"
+      - "8920:8920"
+      - "1900:1900/udp"
+      - "7359:7359/udp"
+    environment:
+      - UID=0
+      - GID=0
+      - GIDLIST=0
+      - NO_PROXY=172.17.0.1,127.0.0.1,localhost
+      - TZ=Asia/Shanghai
+    volumes:
+      - /root/docker-compose/emby/config:/config
+      - /CloudNAS:/CloudNAS:rslave
+      - /home:/home

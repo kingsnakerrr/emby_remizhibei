@@ -1,0 +1,15 @@
+services:
+  symedia:
+    # 与当前服务器实际运行版本一致，避免 latest 更新后配置/数据库不兼容。
+    image: shenxianmq/symedia@sha256:e62eff2200b62394f8362099c98071e8ab56a650051f7bf8ac08f93c2401338f
+    container_name: symedia
+    restart: always
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /root/docker-compose/symedia/config:/app/config
+      - /home:/home
+      - /CloudNAS:/CloudNAS:shared
+    environment:
+      - TZ=Asia/Shanghai
+      - LICENSE_KEY=${SYMEDIA_LICENSE_KEY}
