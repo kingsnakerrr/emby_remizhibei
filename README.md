@@ -56,9 +56,6 @@ curl -fsSL https://raw.githubusercontent.com/kingsnakerrr/emby_remizhibei/main/i
 
 ```text
 /CloudNAS/CloudDrive
-/home/fufu
-/home/fufu2
-/home/test
 /home/symedia_gd
 /home/symedia_jav
 ```

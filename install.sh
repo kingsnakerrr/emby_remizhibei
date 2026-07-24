@@ -179,9 +179,6 @@ install -d -m 0755 \
   "${STACK_ROOT}/embystream/auth" \
   "${STACK_ROOT}/embystream/logs" \
   /CloudNAS \
-  /home/fufu \
-  /home/fufu2 \
-  /home/test \
   /home/symedia_gd \
   /home/symedia_jav
 

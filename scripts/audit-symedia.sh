@@ -30,9 +30,6 @@ for path in "${required_files[@]}"; do
 done
 
 for path in \
-  /home/fufu \
-  /home/fufu2 \
-  /home/test \
   /home/symedia_gd \
   /home/symedia_jav \
   /CloudNAS/CloudDrive; do

@@ -64,9 +64,6 @@ systemctl daemon-reload
 
 install -d -m 0755 \
   /CloudNAS/CloudDrive \
-  /home/fufu \
-  /home/fufu2 \
-  /home/test \
   /home/symedia_gd \
   /home/symedia_jav
 
