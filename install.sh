@@ -17,9 +17,12 @@ INSTALLER_REF="${INSTALLER_REF:-main}"
 INSTALLER_DIR="${STACK_ROOT}/emby-stack-installer"
 LOG_FILE="/var/log/emby-stack-installer.log"
 
-touch "${LOG_FILE}"
-chmod 0600 "${LOG_FILE}"
-exec > >(tee -a "${LOG_FILE}") 2>&1
+if [[ "${EMBY_STACK_LOG_ACTIVE:-0}" != "1" ]]; then
+  touch "${LOG_FILE}"
+  chmod 0600 "${LOG_FILE}"
+  export EMBY_STACK_LOG_ACTIVE=1
+  exec > >(tee -a "${LOG_FILE}") 2>&1
+fi
 
 on_error() {
   local status=$?
