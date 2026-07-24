@@ -11,6 +11,12 @@ PLUGIN_ROOT="/root/docker-compose/emby/config/plugins"
 CONFIG_ROOT="${PLUGIN_ROOT}/configurations"
 DLL="${SOURCE_DIR}/StrmAssistantPro.dll"
 SOURCE_CONFIG="${SOURCE_DIR}/configurations"
+IN_PLACE=false
+
+if [[ "$(readlink -f -- "${SOURCE_DIR}")" == \
+      "$(readlink -f -- "${PLUGIN_ROOT}")" ]]; then
+  IN_PLACE=true
+fi
 
 if [[ ! -s "${DLL}" ]]; then
   echo "缺少 ${DLL}"
@@ -22,10 +28,10 @@ if [[ ! -d "${SOURCE_CONFIG}" ]]; then
 fi
 
 mapfile -t authorization_files < <(
-  find "${SOURCE_CONFIG}" -maxdepth 1 -type f -print
+  find "${SOURCE_CONFIG}" -maxdepth 1 -type f ! -name '*.json' -print
 )
 if [[ ${#authorization_files[@]} -eq 0 ]]; then
-  echo "${SOURCE_CONFIG} 中没有授权文件。"
+  echo "${SOURCE_CONFIG} 中没有非 JSON 授权文件。"
   exit 2
 fi
 
@@ -38,17 +44,20 @@ if [[ -f "${PLUGIN_ROOT}/StrmAssistantPro.dll" ]]; then
   cp -a "${PLUGIN_ROOT}/StrmAssistantPro.dll" "${backup_dir}/"
 fi
 
-install -m 0644 "${DLL}" "${PLUGIN_ROOT}/StrmAssistantPro.dll"
+if [[ "${IN_PLACE}" == "true" ]]; then
+  chmod 0644 "${PLUGIN_ROOT}/StrmAssistantPro.dll"
+else
+  install -m 0644 "${DLL}" "${PLUGIN_ROOT}/StrmAssistantPro.dll"
+fi
 for source_path in "${authorization_files[@]}"; do
   filename="$(basename -- "${source_path}")"
-  case "${filename}" in
-    *.json)
-      echo "跳过 JSON：${filename}；优化 JSON 由 post-auth.sh 生成。"
-      ;;
-    *)
-      install -m 0600 "${source_path}" "${CONFIG_ROOT}/${filename}"
-      ;;
-  esac
+  target_path="${CONFIG_ROOT}/${filename}"
+  if [[ "$(readlink -f -- "${source_path}")" == \
+        "$(readlink -f -- "${target_path}")" ]]; then
+    chmod 0600 "${target_path}"
+  else
+    install -m 0600 "${source_path}" "${target_path}"
+  fi
 done
 
 chown -R root:root "${PLUGIN_ROOT}"
