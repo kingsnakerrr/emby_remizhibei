@@ -20,12 +20,14 @@ TASK = Path(
 )
 
 
-def load(path: Path) -> dict:
+def load(path: Path, required: bool = True) -> dict:
     if not path.exists():
-        sys.exit(
-            f"未找到 {path.name}。请先安装并授权神医助手 PRO 3.0.0.48，"
-            "重启 Emby，让插件创建初始配置。"
-        )
+        if required:
+            sys.exit(
+                f"未找到 {path.name}。请先安装并授权神医助手 PRO，"
+                "重启 Emby，并在插件页面保存一次配置。"
+            )
+        return {}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -38,8 +40,9 @@ def save(path: Path, data: dict) -> None:
     temporary.replace(path)
 
 
-for required in (MAIN, MEDIA, METADATA, EXPERIENCE):
-    load(required)
+main = load(MAIN)
+legacy_files = (MEDIA, METADATA, EXPERIENCE)
+legacy_layout = all(path.exists() for path in legacy_files)
 
 timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 backup = (
@@ -60,7 +63,8 @@ if was_running:
     subprocess.run(["docker", "stop", "emby"], check=True)
 
 try:
-    for path in (MAIN, MEDIA, METADATA, EXPERIENCE):
+    config_files = (MAIN, *legacy_files) if legacy_layout else (MAIN,)
+    for path in config_files:
         shutil.copy2(path, backup / path.name)
 
     main = load(MAIN)
@@ -91,9 +95,11 @@ try:
         }
     )
     main.setdefault("AboutOptions", {})["DebugMode"] = False
-    save(MAIN, main)
-
-    media = load(MEDIA)
+    media = (
+        load(MEDIA)
+        if legacy_layout
+        else main.setdefault("MediaInfoExtractOptions", {})
+    )
     media.update(
         {
             "LibraryScope": "",
@@ -115,9 +121,14 @@ try:
             "CustomEncoderPath": "",
         }
     )
-    save(MEDIA, media)
+    if legacy_layout:
+        save(MEDIA, media)
 
-    metadata = load(METADATA)
+    metadata = (
+        load(METADATA)
+        if legacy_layout
+        else main.setdefault("MetadataEnhanceOptions", {})
+    )
     metadata.update(
         {
             "ChineseMovieDb": False,
@@ -150,9 +161,14 @@ try:
             "MetadataCacheRootFolder": "",
         }
     )
-    save(METADATA, metadata)
+    if legacy_layout:
+        save(METADATA, metadata)
 
-    experience = load(EXPERIENCE)
+    experience = (
+        load(EXPERIENCE)
+        if legacy_layout
+        else main.setdefault("ExperienceEnhanceOptions", {})
+    )
     experience.update(
         {
             "EnhanceNotificationSystem": False,
@@ -170,7 +186,9 @@ try:
             "LibraryScopePlayProgress": True,
         }
     )
-    save(EXPERIENCE, experience)
+    if legacy_layout:
+        save(EXPERIENCE, experience)
+    save(MAIN, main)
 
     TASK.parent.mkdir(parents=True, exist_ok=True)
     TASK.write_text(
@@ -182,6 +200,6 @@ finally:
     if was_running:
         subprocess.run(["docker", "start", "emby"], check=True)
 
-print(f"神医助手播放相关优化已应用。修改前备份：{backup}")
+layout_name = "旧版多文件" if legacy_layout else "3.0.0.49 单文件"
+print(f"神医助手播放相关优化已应用（{layout_name}配置）。修改前备份：{backup}")
 print("追更已关闭，并发 1/1，截图关闭，MediaInfo 持久化已开启。")
-
