@@ -21,12 +21,27 @@ curl -fsSL https://raw.githubusercontent.com/kingsnakerrr/emby_remizhibei/main/i
 单文件 `install.sh` 会从 GitHub 下载完整安装器到
 `/root/docker-compose/emby-stack-installer`，随后自动：
 
-- 执行 `apt update` 和安全的常规 `apt upgrade`；
+- 执行 `apt update`，但不升级内核、GRUB或整套系统；
 - 安装 curl、证书、Python、SQLite、jq、age、Nginx、FUSE 等依赖；
 - 从 Docker 官方仓库安装 Docker Engine、Buildx 和 Compose v2；
 - 启动交互式安装向导。
 
-安装器只支持 Ubuntu/Debian。内核升级需要重启时只会提示，不会自动重启。
+安装器只支持 Ubuntu/Debian。业务安装器默认不执行 `apt upgrade`，因为部分
+云厂商使用定制启动盘，升级 `grub-pc` 可能找不到原设备并导致 `dpkg` 中断。
+如果上次安装已经遇到这种情况，重新运行同一条命令会自动修复未完成的
+`grub-pc/dpkg` 状态后继续。完整日志保存在：
+
+```text
+/var/log/emby-stack-installer.log
+```
+
+如确实需要同时升级整套系统，可显式执行：
+
+```bash
+EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
+```
+
+云主机建议先做快照，并优先使用厂商提供的系统升级方式。
 这个 raw 一行命令要求仓库可读取；建议公开的仓库只放无密码安装器，
 实际账号、OAuth、License 和神医授权继续放在加密配置备份中。
 

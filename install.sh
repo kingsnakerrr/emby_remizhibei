@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
 if [[ ${EUID} -ne 0 ]]; then
   echo "请使用 root 或 sudo 运行。"
   exit 1
@@ -13,10 +16,34 @@ INSTALLER_REPO="${INSTALLER_REPO:-kingsnakerrr/emby_remizhibei}"
 INSTALLER_REF="${INSTALLER_REF:-main}"
 INSTALLER_DIR="${STACK_ROOT}/emby-stack-installer"
 
+repair_interrupted_dpkg() {
+  local audit grub_status
+
+  command -v dpkg >/dev/null 2>&1 || return 0
+  audit="$(dpkg --audit 2>/dev/null || true)"
+  [[ -n "${audit}" ]] || return 0
+
+  echo "检测到上次未完成的软件包配置，正在修复……"
+  grub_status="$(
+    dpkg-query -W -f='${db:Status-Abbrev}' grub-pc 2>/dev/null || true
+  )"
+  if [[ -n "${grub_status}" && "${grub_status}" != "ii " ]]; then
+    echo "检测到未完成的 grub-pc 配置；允许云主机使用空安装设备继续。"
+    {
+      echo "grub-pc grub-pc/install_devices_empty boolean true"
+      echo "grub-pc grub-pc/install_devices multiselect"
+    } | debconf-set-selections
+  fi
+
+  DEBIAN_FRONTEND=noninteractive dpkg --configure -a
+  DEBIAN_FRONTEND=noninteractive apt-get -f install -y
+}
+
 bootstrap_from_github() {
   local temporary_dir archive_url
 
   export DEBIAN_FRONTEND=noninteractive
+  repair_interrupted_dpkg
   if ! command -v curl >/dev/null 2>&1 ||
     ! command -v tar >/dev/null 2>&1; then
     apt-get update
@@ -53,6 +80,21 @@ if [[ ! -f "${REPO_DIR}/setup-wizard.sh" ||
   ! -f "${REPO_DIR}/compose/emby.yml" ]]; then
   bootstrap_from_github "$@"
 fi
+
+LOG_FILE="/var/log/emby-stack-installer.log"
+touch "${LOG_FILE}"
+chmod 0600 "${LOG_FILE}"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+on_error() {
+  local status=$?
+  echo
+  echo "安装失败：第 ${BASH_LINENO[0]:-?} 行，退出码 ${status}。"
+  echo "完整日志：${LOG_FILE}"
+  echo "修复问题后可直接重跑同一条一键安装命令。"
+  exit "${status}"
+}
+trap on_error ERR
 
 usage() {
   cat <<'EOF'
@@ -109,9 +151,15 @@ install_packages() {
     exit 3
   fi
 
-  echo "更新系统软件包……"
+  repair_interrupted_dpkg
+  echo "更新软件包索引……"
   apt-get update
-  apt-get upgrade -y
+  if [[ "${EMBY_STACK_FULL_UPGRADE:-0}" == "1" ]]; then
+    echo "已显式要求整机升级；开始执行 apt-get upgrade……"
+    apt-get upgrade -y
+  else
+    echo "跳过内核、GRUB和整机升级，只安装本项目必要依赖。"
+  fi
   apt-get install -y \
     ca-certificates curl gnupg lsb-release \
     python3 sqlite3 jq age tar gzip openssl nginx \
@@ -160,7 +208,7 @@ install_packages
 
 if [[ -f /var/run/reboot-required ]]; then
   echo
-  echo "系统升级后需要重启。安装会继续完成，但全部配置结束后请执行 reboot。"
+  echo "系统已有待生效升级，需要重启；安装会继续，完成后请执行 reboot。"
 fi
 
 if [[ -n "${RESTORE_DIR}" ]]; then
