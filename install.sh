@@ -15,6 +15,21 @@ RESTORE_DIR=""
 INSTALLER_REPO="${INSTALLER_REPO:-kingsnakerrr/emby_remizhibei}"
 INSTALLER_REF="${INSTALLER_REF:-main}"
 INSTALLER_DIR="${STACK_ROOT}/emby-stack-installer"
+LOG_FILE="/var/log/emby-stack-installer.log"
+
+touch "${LOG_FILE}"
+chmod 0600 "${LOG_FILE}"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+on_error() {
+  local status=$?
+  echo
+  echo "安装失败：第 ${BASH_LINENO[0]:-?} 行，退出码 ${status}。"
+  echo "完整日志：${LOG_FILE}"
+  echo "修复问题后可直接重跑同一条一键安装命令。"
+  exit "${status}"
+}
+trap on_error ERR
 
 repair_interrupted_dpkg() {
   local audit grub_status
@@ -80,21 +95,6 @@ if [[ ! -f "${REPO_DIR}/setup-wizard.sh" ||
   ! -f "${REPO_DIR}/compose/emby.yml" ]]; then
   bootstrap_from_github "$@"
 fi
-
-LOG_FILE="/var/log/emby-stack-installer.log"
-touch "${LOG_FILE}"
-chmod 0600 "${LOG_FILE}"
-exec > >(tee -a "${LOG_FILE}") 2>&1
-
-on_error() {
-  local status=$?
-  echo
-  echo "安装失败：第 ${BASH_LINENO[0]:-?} 行，退出码 ${status}。"
-  echo "完整日志：${LOG_FILE}"
-  echo "修复问题后可直接重跑同一条一键安装命令。"
-  exit "${status}"
-}
-trap on_error ERR
 
 usage() {
   cat <<'EOF'
