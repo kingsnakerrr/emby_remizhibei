@@ -24,10 +24,23 @@ else
     "${BASE_URL}/${ARCHIVE}"
   curl -fL --retry 3 -o "${temporary_dir}/embystream.sha512sum" \
     "${BASE_URL}/embystream.sha512sum"
-  (
-    cd "${temporary_dir}"
-    sha512sum -c embystream.sha512sum --ignore-missing
-  )
+  expected_sha="$(
+    awk -v archive="${ARCHIVE}" \
+      '$NF == archive || $NF ~ ("/" archive "$") { print $1; exit }' \
+      "${temporary_dir}/embystream.sha512sum"
+  )"
+  if [[ ! "${expected_sha}" =~ ^[0-9a-fA-F]{128}$ ]]; then
+    echo "官方校验文件中没有找到 ${ARCHIVE} 的有效 SHA-512。"
+    exit 1
+  fi
+  actual_sha="$(
+    sha512sum "${temporary_dir}/${ARCHIVE}" | awk '{ print $1 }'
+  )"
+  if [[ "${actual_sha,,}" != "${expected_sha,,}" ]]; then
+    echo "EmbyStream 下载包 SHA-512 校验失败。"
+    exit 1
+  fi
+  echo "${ARCHIVE}: SHA-512 校验通过。"
   tar -xzf "${temporary_dir}/${ARCHIVE}" -C "${temporary_dir}"
   binary="$(find "${temporary_dir}" -type f -name embystream -print -quit)"
   if [[ -z "${binary}" ]]; then
@@ -49,4 +62,3 @@ install -m 0644 "${REPO_DIR}/systemd/embystream.service" \
   /etc/systemd/system/embystream.service
 systemctl daemon-reload
 echo "EmbyStream ${VERSION} 已安装，等待 OAuth 配置。"
-
