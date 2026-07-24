@@ -150,8 +150,8 @@ Google、CD2、Emby 的登录密码。
 
 ## 神医助手导入
 
-商业插件 DLL 和授权文件不要明文提交 Git，即使仓库是 Private。配置恢复包已经
-通过 `age` 加密保存 `plugins/StrmAssistantPro.dll`、授权文件和神医 JSON，
+商业插件 DLL 和授权文件不要明文提交 Git，即使仓库是 Private。备份脚本生成的
+配置恢复包会通过 `age` 加密保存 `plugins/StrmAssistantPro.dll`、授权文件和神医 JSON，
 使用 `setup-wizard.sh --restore` 时会自动恢复，无需再次导入。
 
 全新安装时可在 VPS 准备：
@@ -196,7 +196,9 @@ Symedia 的原配置不是单个配置文件。恢复包会一起保存：
 sudo ./scripts/backup-encrypted.sh /root/emby-stack-backup
 ```
 
-脚本会提示输入加密密码，并把大文件切成小于 GitHub Release 单文件上限的分片。把 `*.age.part-*` 上传到**私有仓库的 Release**，不要直接提交到 Git 历史。
+脚本会提示输入加密密码，并把大文件切成小于 GitHub Release 单文件上限的分片。
+把 `*.age.part-*` 放到私有 Release 或其他私有存储，不要提交到此公开仓库的
+Git 历史。
 
 备份保留 CD2 登录、Emby 数据库和设置、神医配置、Symedia
 YAML/密钥/数据库及 EmbyStream OAuth，但明确不包含：
@@ -235,7 +237,8 @@ Google 账号本身不能在没有登录/授权的情况下创建。用户完成
 
 ## 安全规则
 
-- 仓库必须设为 Private，但 Private 也不能代替加密。
+- 此仓库故意设为 Public，只放无密码安装代码，便于使用 raw 一行安装。
+- 真实配置备份必须经过 `age` 强密码加密，并优先存放到私有 Release 或私有存储。
 - 不要提交 `/root/docker-compose/*/config` 的真实副本。
 - 不要提交 `.env.private`、OAuth JSON、Token、License、Emby 数据库。
 - 建议开启 GitHub Secret Scanning。
