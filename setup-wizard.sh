@@ -8,6 +8,11 @@ fi
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 STACK_ROOT="/root/docker-compose"
+CD2_DATA="${STACK_ROOT}/clouddrive2/config/cloudapidata.json"
+EMBY_SYSTEM="${STACK_ROOT}/emby/config/system.xml"
+PLUGIN_ROOT="${STACK_ROOT}/emby/config/plugins"
+PLUGIN_DLL="${PLUGIN_ROOT}/StrmAssistantPro.dll"
+PLUGIN_CONFIG="${PLUGIN_ROOT}/configurations"
 
 pause_for_user() {
   echo
@@ -19,6 +24,40 @@ ask_yes_no() {
   local answer
   read -r -p "${prompt} [y/N]: " answer
   [[ "${answer,,}" == "y" || "${answer,,}" == "yes" ]]
+}
+
+cd2_is_ready() {
+  [[ -s "${CD2_DATA}" ]] &&
+    grep -qE '"dir_name"[[:space:]]*:[[:space:]]*"/GoogleDrive"' \
+      "${CD2_DATA}"
+}
+
+emby_is_initialized() {
+  [[ -s "${EMBY_SYSTEM}" ]] &&
+    grep -qiE '<IsStartupWizardCompleted>[[:space:]]*true' \
+      "${EMBY_SYSTEM}"
+}
+
+strm_assistant_is_staged() {
+  [[ -s "${PLUGIN_DLL}" ]] &&
+    [[ -d "${PLUGIN_CONFIG}" ]] &&
+    find "${PLUGIN_CONFIG}" -maxdepth 1 -type f ! -name '*.json' \
+      -print -quit | grep -q .
+}
+
+apply_strm_assistant_optimizations() {
+  if bash "${REPO_DIR}/post-auth.sh" strm-assistant; then
+    return 0
+  fi
+  cat <<EOF
+
+神医助手尚未生成完整配置。
+请打开 Emby 后台 → 插件 → 神医助手，确认授权并点击一次“保存”。
+EOF
+  pause_for_user "请完成神医助手首次加载和保存。"
+  docker restart emby >/dev/null
+  sleep 15
+  bash "${REPO_DIR}/post-auth.sh" strm-assistant
 }
 
 if [[ "${1:-}" == "--restore" ]]; then
@@ -42,7 +81,11 @@ server_ip="$(
     hostname -I | awk '{print $1}'
 )"
 
-cat <<EOF
+if cd2_is_ready; then
+  echo
+  echo "检测到已添加 /GoogleDrive，跳过 CD2 登录授权。"
+else
+  cat <<EOF
 
 第一步：CD2 登录和 Google Drive 授权
 打开：http://${server_ip}:19798
@@ -50,23 +93,35 @@ cat <<EOF
 确认团队盘路径能看到：/GoogleDrive/zero
 不要在终端输入 Google 账号密码。
 EOF
-pause_for_user "请在浏览器完成 CD2/Google 授权。"
+  pause_for_user "请在浏览器完成 CD2/Google 授权。"
+fi
 bash "${REPO_DIR}/post-auth.sh" cd2
 
-cat <<EOF
+if emby_is_initialized; then
+  echo
+  echo "检测到 Emby 已完成首次初始化，跳过初始化等待。"
+else
+  cat <<EOF
 
 第二步：Emby 首次初始化
 打开：http://${server_ip}:8096
 创建管理员并完成初始设置。
 EOF
-pause_for_user "请完成 Emby 初始化。"
+  pause_for_user "请完成 Emby 初始化。"
+fi
 
-if ask_yes_no "是否现在从本地目录导入神医助手 DLL 和授权文件？"; then
+if strm_assistant_is_staged; then
+  echo
+  echo "检测到 Emby 最终目录中的神医助手 DLL 和授权文件，直接安装并优化。"
+  bash "${REPO_DIR}/scripts/install-strm-assistant-local.sh" \
+    "${PLUGIN_ROOT}"
+  apply_strm_assistant_optimizations
+elif ask_yes_no "是否现在从本地目录导入神医助手 DLL 和授权文件？"; then
   read -r -p \
     "导入目录（默认 /root/strm-assistant-import）: " plugin_source
   plugin_source="${plugin_source:-/root/strm-assistant-import}"
   bash "${REPO_DIR}/scripts/install-strm-assistant-local.sh" "${plugin_source}"
-  bash "${REPO_DIR}/post-auth.sh" strm-assistant
+  apply_strm_assistant_optimizations
 else
   cat <<'EOF'
 已跳过神医助手。稍后把文件按以下结构放好：
