@@ -166,7 +166,21 @@ Google、CD2、Emby 的登录密码。
 配置恢复包会通过 `age` 加密保存 `plugins/StrmAssistantPro.dll`、授权文件和神医 JSON，
 使用 `setup-wizard.sh --restore` 时会自动恢复，无需再次导入。
 
-全新安装时可在 VPS 准备：
+如果已经用文件管理器直接上传到 Emby 最终目录：
+
+```text
+/root/docker-compose/emby/config/plugins/
+├── StrmAssistantPro.dll
+└── configurations/
+    ├── 授权ID文件
+    └── 授权文件.lic
+```
+
+直接重新运行一键安装命令即可。向导会自动识别这些文件，备份现有插件、修正权限、
+重启 Emby 并应用神医助手优化，不再要求使用中转目录。已经完成的 CD2 授权和 Emby
+首次初始化也会自动跳过，适合 SSH 断线后继续。
+
+全新安装也可以先在 VPS 中转目录准备：
 
 ```text
 /root/strm-assistant-import/
