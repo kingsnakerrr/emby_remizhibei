@@ -1,3 +1,6 @@
+Exit code: 0
+Wall time: 0.2 seconds
+Output:
 # Emby 团队盘一键安装器
 
 这是为 Ubuntu/Debian VPS 准备的 Emby 团队盘播放环境安装器，用于部署并恢复：
@@ -128,7 +131,7 @@ Google、CD2、Emby 的登录密码。
    ```
 
 5. 打开 `http://VPS-IP:8096` 完成 Emby 初始化。
-6. 安装并授权神医助手 PRO 3.0.0.48，重启 Emby。
+6. 安装并授权神医助手 PRO（兼容 3.0.0.49 单文件配置及旧版多文件配置），重启 Emby。
 7. 运行：
 
    ```bash
@@ -269,3 +272,4 @@ Google 账号本身不能在没有登录/授权的情况下创建。用户完成
 - 不要提交 `.env.private`、OAuth JSON、Token、License、Emby 数据库。
 - 建议开启 GitHub Secret Scanning。
 - 管理端口 19798、60002 不应直接对全网开放。
+
