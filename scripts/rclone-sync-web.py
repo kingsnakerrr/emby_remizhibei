@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import secrets
 import shutil
@@ -15,6 +16,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from collections import OrderedDict
 
 from flask import (
     Flask,
@@ -36,6 +38,9 @@ STATE_FILE = APP_ROOT / "state.json"
 LOG_FILE = APP_ROOT / "logs" / "sync.log"
 RCLONE_CONFIG = Path("/root/.config/rclone/rclone.conf")
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+BROWSE_CACHE_TTL_SECONDS = 300
+BROWSE_CACHE_MAX_ENTRIES = 8
+BROWSE_CACHE_MAX_ITEMS = 200_000
 ALLOWED_LOCAL_ROOTS = (
     Path("/home"),
     Path("/media"),
@@ -142,6 +147,8 @@ if state.get("running"):
     write_json(STATE_FILE, state)
 sync_process: subprocess.Popen | None = None
 stop_event = threading.Event()
+browse_cache_lock = threading.RLock()
+browse_cache: OrderedDict[tuple[str, str], tuple[float, list[dict]]] = OrderedDict()
 
 app = Flask(__name__)
 app.secret_key = settings["secret_key"]
@@ -181,6 +188,9 @@ BASE_TEMPLATE = r"""
     .flash{padding:10px 13px;margin:0 0 14px;border-radius:8px;background:#e7f1ff}
     .dir{display:block;width:100%;text-align:left;background:#f5f8fc;color:#234;
       border:1px solid var(--line);padding:8px;margin:5px 0;border-radius:7px;cursor:pointer}
+    .dir-tools{display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap}
+    .dir-tools select{width:auto;min-width:82px;padding:7px}.dir-tools .btn{padding:7px 11px}
+    .dir-tools .btn:disabled{opacity:.45;cursor:not-allowed}
     nav a{margin-left:15px}.status{font-size:28px;font-weight:800}.small{font-size:13px}
   </style>
 </head>
@@ -444,32 +454,66 @@ def dashboard():
         </div>
         <script>
         const browse = document.getElementById('browse');
-        async function loadDirs() {
+        let directoryPage = 1;
+        let directoryPageSize = '20';
+        async function loadDirs(page=1, refresh=false) {
+          directoryPage = page;
           const remote = document.getElementById('remote').value;
           const path = document.getElementById('remote_path').value;
           const box = document.getElementById('directories');
           if (!remote) { box.textContent = '请先选择团队盘账号。'; return; }
           box.textContent = '正在读取……';
           const response = await fetch('/api/browse?remote=' +
-            encodeURIComponent(remote) + '&path=' + encodeURIComponent(path));
+            encodeURIComponent(remote) + '&path=' + encodeURIComponent(path) +
+            '&page=' + encodeURIComponent(page) +
+            '&page_size=' + encodeURIComponent(directoryPageSize) +
+            (refresh ? '&refresh=1' : ''));
           const data = await response.json();
           if (!response.ok) { box.textContent = data.error || '读取失败'; return; }
           box.innerHTML = '';
+          directoryPage = data.page;
+          const tools = document.createElement('div'); tools.className='dir-tools';
+          const summary = document.createElement('span');
+          summary.textContent = '共 ' + data.total + ' 个目录，第 ' +
+            data.page + '/' + data.pages + ' 页';
+          const sizeLabel = document.createElement('span'); sizeLabel.textContent='每页';
+          const size = document.createElement('select');
+          for (const value of ['20','50','100','all']) {
+            const option=document.createElement('option'); option.value=value;
+            option.textContent=value === 'all' ? '全部' : value;
+            option.selected=String(data.page_size) === value;
+            size.appendChild(option);
+          }
+          size.onchange=()=>{directoryPageSize=size.value;loadDirs(1)};
+          const previous=document.createElement('button'); previous.type='button';
+          previous.className='btn secondary'; previous.textContent='上一页';
+          previous.disabled=data.page <= 1;
+          previous.onclick=()=>loadDirs(data.page-1);
+          const next=document.createElement('button'); next.type='button';
+          next.className='btn secondary'; next.textContent='下一页';
+          next.disabled=data.page >= data.pages;
+          next.onclick=()=>loadDirs(data.page+1);
+          const reload=document.createElement('button'); reload.type='button';
+          reload.className='btn secondary'; reload.textContent='刷新目录';
+          reload.onclick=()=>loadDirs(data.page, true);
+          tools.append(summary,sizeLabel,size,previous,next,reload);
+          box.appendChild(tools);
           if (data.parent !== null) {
             const up = document.createElement('button'); up.type='button';
             up.className='dir'; up.textContent='⬆ 返回上级';
-            up.onclick=()=>{document.getElementById('remote_path').value=data.parent;loadDirs()};
+            up.onclick=()=>{document.getElementById('remote_path').value=data.parent;loadDirs(1)};
             box.appendChild(up);
           }
-          for (const dir of data.dirs) {
+          data.dirs.forEach((dir, index) => {
             const button=document.createElement('button'); button.type='button';
-            button.className='dir'; button.textContent='📁 '+dir.name;
-            button.onclick=()=>{document.getElementById('remote_path').value=dir.path;loadDirs()};
+            button.className='dir';
+            button.textContent=(data.start_index + index + 1) + '. 📁 ' + dir.name;
+            button.onclick=()=>{document.getElementById('remote_path').value=dir.path;loadDirs(1)};
             box.appendChild(button);
-          }
+          });
           if (!data.dirs.length) box.append('当前目录没有子目录。');
         }
-        browse.addEventListener('click', loadDirs);
+        browse.addEventListener('click', ()=>loadDirs(1));
         </script>
         """,
         settings=settings,
@@ -487,34 +531,82 @@ def browse_remote():
         return jsonify(error="无效的团队盘账号。"), 400
     try:
         path = clean_remote_path(request.args.get("path", ""))
-        target = f"{remote}:{path}"
-        result = subprocess.run(
-            [
-                "rclone",
-                "lsf",
-                target,
-                "--config",
-                str(RCLONE_CONFIG),
-                "--dirs-only",
-                "--max-depth",
-                "1",
-            ],
-            text=True,
-            capture_output=True,
-            timeout=90,
-            check=False,
-        )
-        if result.returncode != 0:
-            return jsonify(error=result.stderr.strip()[-500:] or "rclone 读取失败"), 400
-        dirs = []
-        for item in result.stdout.splitlines():
-            name = item.rstrip("/")
-            if not name:
-                continue
-            child = "/".join(value for value in (path, name) if value)
-            dirs.append({"name": name, "path": child})
+        page_size = request.args.get("page_size", "20").lower()
+        if page_size not in {"20", "50", "100", "all"}:
+            raise ValueError("每页数量只能是 20、50、100 或全部。")
+        page = max(1, int(request.args.get("page", "1")))
+        cache_key = (remote, path)
+        refresh = request.args.get("refresh") == "1"
+        now = time.monotonic()
+        with browse_cache_lock:
+            cached = browse_cache.get(cache_key)
+            if cached and now - cached[0] <= BROWSE_CACHE_TTL_SECONDS and not refresh:
+                dirs = cached[1]
+                browse_cache.move_to_end(cache_key)
+            else:
+                dirs = None
+        if dirs is None:
+            target = f"{remote}:{path}"
+            result = subprocess.run(
+                [
+                    "rclone",
+                    "lsf",
+                    target,
+                    "--config",
+                    str(RCLONE_CONFIG),
+                    "--dirs-only",
+                    "--max-depth",
+                    "1",
+                ],
+                text=True,
+                capture_output=True,
+                timeout=180,
+                check=False,
+            )
+            if result.returncode != 0:
+                return jsonify(
+                    error=result.stderr.strip()[-500:] or "rclone 读取失败"
+                ), 400
+            dirs = []
+            for item in result.stdout.splitlines():
+                name = item.rstrip("/")
+                if not name:
+                    continue
+                child = "/".join(value for value in (path, name) if value)
+                dirs.append({"name": name, "path": child})
+            dirs.sort(key=lambda item: item["name"].casefold())
+            with browse_cache_lock:
+                browse_cache[cache_key] = (now, dirs)
+                browse_cache.move_to_end(cache_key)
+                while len(browse_cache) > 1 and (
+                    len(browse_cache) > BROWSE_CACHE_MAX_ENTRIES
+                    or sum(len(value[1]) for value in browse_cache.values())
+                    > BROWSE_CACHE_MAX_ITEMS
+                ):
+                    browse_cache.popitem(last=False)
+        total = len(dirs)
+        if page_size == "all":
+            pages = 1
+            page = 1
+            start_index = 0
+            visible_dirs = dirs
+        else:
+            size = int(page_size)
+            pages = max(1, math.ceil(total / size))
+            page = min(page, pages)
+            start_index = (page - 1) * size
+            visible_dirs = dirs[start_index:start_index + size]
         parent = None if not path else "/".join(path.split("/")[:-1])
-        return jsonify(current=path, parent=parent, dirs=dirs[:1000])
+        return jsonify(
+            current=path,
+            parent=parent,
+            dirs=visible_dirs,
+            total=total,
+            page=page,
+            pages=pages,
+            page_size=page_size,
+            start_index=start_index,
+        )
     except (ValueError, subprocess.TimeoutExpired) as error:
         return jsonify(error=str(error)), 400
 
@@ -551,6 +643,8 @@ def upload_config():
             os.chmod(backup, 0o600)
         os.replace(temporary_path, RCLONE_CONFIG)
         os.chmod(RCLONE_CONFIG, 0o600)
+        with browse_cache_lock:
+            browse_cache.clear()
         flash("rclone.conf 已验证并上传。")
     except (ValueError, subprocess.TimeoutExpired, OSError) as error:
         flash(str(error))
@@ -593,6 +687,7 @@ def save_sync():
             write_json(SETTINGS_FILE, settings)
         flash("同步设置已保存。")
     except (ValueError, OSError) as error:
+        app.logger.warning("同步设置保存失败：%s", error)
         flash(str(error))
     return redirect(url_for("dashboard"))
 
