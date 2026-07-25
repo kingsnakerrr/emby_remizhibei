@@ -26,6 +26,27 @@ if command -v nginx >/dev/null 2>&1; then
   systemctl reload nginx
 fi
 
-systemctl enable --now embystream.service
+started_at="$(date --iso-8601=seconds)"
+systemctl enable embystream.service
+systemctl restart embystream.service
+sleep 3
+
+if ! systemctl is-active --quiet embystream.service; then
+  echo "EmbyStream 启动失败，请检查以下状态和日志。"
+  systemctl --no-pager --full status embystream.service || true
+  exit 1
+fi
+
+if journalctl -u embystream.service --since "${started_at}" --no-pager |
+    grep -q 'google_drive_refresh_failed'; then
+  echo "EmbyStream 已启动，但 Google OAuth 刷新失败。"
+  journalctl -u embystream.service --since "${started_at}" --no-pager |
+    grep -A 4 'google_drive_refresh_failed' | head -n 8
+  systemctl stop embystream.service
+  echo "已停止 EmbyStream，避免无效 OAuth 凭据导致高频重试。"
+  echo "请使用同一组 Google Client ID/Secret 重新生成 Refresh Token。"
+  exit 1
+fi
+
 systemctl --no-pager --full status embystream.service
 

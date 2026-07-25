@@ -33,7 +33,17 @@ check "Emby 能看到本地 STRM 根目录" docker exec emby test -d /home/symed
 check "Emby 8096" curl -fsS --max-time 5 http://127.0.0.1:8096/emby/System/Info/Public
 
 if systemctl list-unit-files embystream.service >/dev/null 2>&1; then
-  check "EmbyStream 服务" systemctl is-active embystream.service
+  embystream_healthy() {
+    local active_since
+    systemctl is-active --quiet embystream.service || return 1
+    active_since="$(
+      systemctl show embystream.service \
+        -p ActiveEnterTimestamp --value
+    )"
+    ! journalctl -u embystream.service --since "${active_since}" --no-pager |
+      grep -q 'google_drive_refresh_failed'
+  }
+  check "EmbyStream 服务和 Google OAuth" embystream_healthy
 fi
 
 if [[ ${failed} -ne 0 ]]; then
