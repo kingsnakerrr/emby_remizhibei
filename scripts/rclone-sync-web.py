@@ -97,6 +97,7 @@ def initial_settings(username: str, password: str) -> dict:
         "enabled": False,
         "mode": "copy",
         "metadata_only": False,
+        "confirm_mirror": False,
         "transfers": 4,
         "checkers": 8,
     }
@@ -135,6 +136,10 @@ initialize()
 settings_lock = threading.RLock()
 state_lock = threading.RLock()
 settings = read_json(SETTINGS_FILE, initial_settings("admin", "admin"))
+if "confirm_mirror" not in settings:
+    # A previously saved sync mode already passed the mandatory confirmation.
+    settings["confirm_mirror"] = settings.get("mode") == "sync"
+    write_json(SETTINGS_FILE, settings)
 state = read_json(STATE_FILE, {})
 if state.get("running"):
     state.update(
@@ -441,7 +446,8 @@ def dashboard():
                 只传 STRM、NFO、图片和字幕，排除影片本体</label></p>
               <p><label><input type="checkbox" name="enabled"
                 {{ 'checked' if settings.enabled else '' }}>启用定时同步</label></p>
-              <p><label><input type="checkbox" name="confirm_mirror">
+              <p><label><input type="checkbox" name="confirm_mirror"
+                {{ 'checked' if settings.confirm_mirror else '' }}>
                 若选择镜像同步，我确认本地多余文件会被删除</label></p>
               <button class="btn" type="submit">保存设置</button>
             </form>
@@ -682,6 +688,10 @@ def save_sync():
                     "mode": mode,
                     "metadata_only": request.form.get("metadata_only") == "on",
                     "enabled": request.form.get("enabled") == "on",
+                    "confirm_mirror": (
+                        mode == "sync"
+                        and request.form.get("confirm_mirror") == "on"
+                    ),
                 }
             )
             write_json(SETTINGS_FILE, settings)

@@ -29,6 +29,102 @@ jobs:
           bash -n setup-wizard.sh
           bash -n healthcheck.sh
 
+      - name: Test every sync setting persists
+        run: |
+          sudo python3 - <<'PY'
+          import importlib.util
+          import json
+          import re
+          from pathlib import Path
+
+          spec = importlib.util.spec_from_file_location(
+              "rclone_sync_web", "scripts/rclone-sync-web.py"
+          )
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.SETTINGS_FILE = Path("/tmp/rclone-sync-settings-test.json")
+          module.settings = module.settings.copy()
+          module.settings["must_change_password"] = False
+          module.rclone_remotes = lambda: ["test_remote"]
+          module.validate_local_path = lambda value: value
+          client = module.app.test_client()
+          with client.session_transaction() as session:
+              session["user"] = module.settings["username"]
+              session["csrf"] = "test-csrf"
+
+          response = client.post(
+              "/save-sync",
+              data={
+                  "csrf": "test-csrf",
+                  "remote": "test_remote",
+                  "remote_path": "backup/movies",
+                  "local_path": "/home/symedia_gd/movies",
+                  "interval_minutes": "37",
+                  "transfers": "7",
+                  "checkers": "13",
+                  "mode": "sync",
+                  "metadata_only": "on",
+                  "enabled": "on",
+                  "confirm_mirror": "on",
+              },
+          )
+          assert response.status_code == 302
+          saved = json.loads(module.SETTINGS_FILE.read_text())
+          expected = {
+              "remote": "test_remote",
+              "remote_path": "backup/movies",
+              "local_path": "/home/symedia_gd/movies",
+              "interval_minutes": 37,
+              "transfers": 7,
+              "checkers": 13,
+              "mode": "sync",
+              "metadata_only": True,
+              "enabled": True,
+              "confirm_mirror": True,
+          }
+          assert all(saved[key] == value for key, value in expected.items())
+          dashboard = client.get("/").get_data(as_text=True)
+          assert re.search(r'name="confirm_mirror"[^>]*checked', dashboard)
+
+          response = client.post(
+              "/save-sync",
+              data={
+                  "csrf": "test-csrf",
+                  "remote": "test_remote",
+                  "remote_path": "backup/movies",
+                  "local_path": "/home/symedia_gd/movies",
+                  "interval_minutes": "10",
+                  "transfers": "4",
+                  "checkers": "8",
+                  "mode": "copy",
+              },
+          )
+          assert response.status_code == 302
+          saved = json.loads(module.SETTINGS_FILE.read_text())
+          assert saved["mode"] == "copy"
+          assert saved["metadata_only"] is False
+          assert saved["enabled"] is False
+          assert saved["confirm_mirror"] is False
+
+          response = client.post(
+              "/save-sync",
+              data={
+                  "csrf": "test-csrf",
+                  "remote": "test_remote",
+                  "remote_path": "backup/movies",
+                  "local_path": "/home/symedia_gd/movies",
+                  "interval_minutes": "10",
+                  "transfers": "4",
+                  "checkers": "8",
+                  "mode": "sync",
+              },
+          )
+          assert response.status_code == 302
+          saved = json.loads(module.SETTINGS_FILE.read_text())
+          assert saved["mode"] == "copy"
+          module.SETTINGS_FILE.unlink()
+          PY
+
       - name: Smoke test web service
         run: |
           sudo env RCLONE_SYNC_INITIAL_USER=admin \
