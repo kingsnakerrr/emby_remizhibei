@@ -37,6 +37,18 @@ if ! systemctl is-active --quiet embystream.service; then
   exit 1
 fi
 
+refresh_due_count="$(
+  journalctl -u embystream.service --since "${started_at}" --no-pager |
+    grep -c 'google_drive_refresh_scheduler_due' || true
+)"
+if (( refresh_due_count >= 20 )); then
+  echo "检测到 EmbyStream Google Token 预刷新调度器高频死循环（${refresh_due_count} 次/约3秒）。"
+  echo "这是 EmbyStream v0.0.43 的调度异常，不是 OAuth 授权失败，也不是服务器入侵。"
+  systemctl stop embystream.service
+  echo "已自动停止 EmbyStream，避免持续占满 CPU 和写爆日志；CD2/Emby 8096 主线路不受影响。"
+  exit 1
+fi
+
 if journalctl -u embystream.service --since "${started_at}" --no-pager |
     grep -q 'google_drive_refresh_failed'; then
   echo "EmbyStream 已启动，但 Google OAuth 刷新失败。"

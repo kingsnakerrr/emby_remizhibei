@@ -77,7 +77,10 @@ cat <<EOF
   sudo /root/docker-compose/emby-stack-installer/healthcheck.sh
 
 验收标准：
-  [OK] EmbyStream 服务和 Google OAuth
+  [OK] EmbyStream 服务、Google OAuth 和刷新调度器
+
+  若检测到 google_drive_refresh_scheduler_due 毫秒级循环，安装器会自动停止
+  EmbyStream，避免占满 CPU；此时 8096 的 CD2 主线路仍可正常使用。
 
 使用：
   原 CD2 主线路：http://${server_ip}:8096

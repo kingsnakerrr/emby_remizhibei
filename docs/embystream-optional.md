@@ -145,8 +145,13 @@ sudo /root/docker-compose/emby-stack-installer/healthcheck.sh
 看到下面这行即通过：
 
 ```text
-[OK] EmbyStream 服务和 Google OAuth
+[OK] EmbyStream 服务、Google OAuth 和刷新调度器
 ```
+
+安装器还会观察启动后的日志。如果 v0.0.43 出现
+`google_drive_refresh_scheduler_due` 毫秒级循环，会自动停止 EmbyStream，
+避免单核长期满载和日志持续增长。此时继续使用 8096 主线路，等待上游修复，
+不要用反复重启掩盖问题。
 
 ## 五、客户端使用与回退
 
