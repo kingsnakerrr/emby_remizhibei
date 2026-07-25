@@ -1,6 +1,3 @@
-Exit code: 0
-Wall time: 0.2 seconds
-Output:
 # Emby 团队盘一键安装器
 
 这是为 Ubuntu/Debian VPS 准备的 Emby 团队盘播放环境安装器，用于部署并恢复：

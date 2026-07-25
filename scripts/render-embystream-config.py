@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import os
 import re
+import secrets
+import string
 import sys
 from pathlib import Path
 from string import Template
@@ -35,6 +37,22 @@ if missing:
         "请先填写 /root/docker-compose/embystream/.env.private："
         + ", ".join(missing)
     )
+
+generated = []
+alphabet = string.ascii_letters + string.digits
+for key in ("EMBYSTREAM_ENCIPHER_KEY", "EMBYSTREAM_ENCIPHER_IV"):
+    if not values.get(key):
+        values[key] = "".join(secrets.choice(alphabet) for _ in range(16))
+        generated.append(key)
+
+if generated:
+    with env_path.open("a", encoding="utf-8", newline="\n") as env_file:
+        if env_path.stat().st_size:
+            env_file.write("\n")
+        for key in generated:
+            env_file.write(f"{key}={values[key]}\n")
+    os.chmod(env_path, 0o600)
+    print("已在 .env.private 中生成 EmbyStream 本机加密密钥。")
 
 for key, value in values.items():
     if "\n" in value or "\r" in value or '"' in value:

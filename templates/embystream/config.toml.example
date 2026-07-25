@@ -6,6 +6,8 @@ root_path = "/root/docker-compose/embystream/logs"
 [General]
 memory_mode = "middle"
 stream_mode = "dual"
+encipher_key = "$EMBYSTREAM_ENCIPHER_KEY"
+encipher_iv = "$EMBYSTREAM_ENCIPHER_IV"
 
 [Emby]
 url = "http://127.0.0.1"

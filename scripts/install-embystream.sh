@@ -50,10 +50,10 @@ else
   install -m 0755 "${binary}" "${TARGET}/bin/embystream"
 fi
 
-if [[ ! -e "${TARGET}/config/config.toml.example" ]]; then
-  install -m 0644 "${REPO_DIR}/templates/embystream/config.toml.example" \
-    "${TARGET}/config/config.toml.example"
-fi
+# The example contains no credentials. Always refresh it so an existing
+# installation receives fields required by newer EmbyStream releases.
+install -m 0644 "${REPO_DIR}/templates/embystream/config.toml.example" \
+  "${TARGET}/config/config.toml.example"
 if [[ ! -e "${TARGET}/.env.private" ]]; then
   install -m 0600 "${REPO_DIR}/templates/embystream/.env.private.example" \
     "${TARGET}/.env.private"
