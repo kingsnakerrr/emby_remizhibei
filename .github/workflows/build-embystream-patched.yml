@@ -21,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: PiliPili-Team/EmbyStream
-          ref: 43cb11f
+          ref: 43cb11f6cbc24806116f203e6860ce31d6a4df09
           path: upstream
 
       - name: Apply audited scheduler patch
