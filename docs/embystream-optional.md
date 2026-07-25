@@ -3,6 +3,12 @@
 EmbyStream 是本项目最后安装的可选组件。跳过它不会影响
 CloudDrive2、Symedia、Emby 和神医助手主线路。
 
+安装器使用 `embystream-v0.0.43-p1`：它基于上游 v0.0.43
+提交 `43cb11f6cbc24806116f203e6860ce31d6a4df09`，只加入本仓库中可审计的
+OAuth 刷新调度器退避和最小休眠补丁。发布包由 GitHub Actions 从固定上游
+提交可复现构建并生成 SHA512，避免无效 OAuth 令牌触发毫秒级循环、CPU
+打满和日志暴涨。
+
 ## 它如何工作
 
 EmbyStream **不会**同步团队盘，也不会生成 STRM、NFO、封面或第二套 Emby

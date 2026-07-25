@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-VERSION="v0.0.43"
+VERSION="embystream-v0.0.43-p1"
 ARCHIVE="embystream-amd64-linux.tar.gz"
-BASE_URL="https://github.com/PiliPili-Team/EmbyStream/releases/download/${VERSION}"
+BASE_URL="https://github.com/kingsnakerrr/emby_remizhibei/releases/download/${VERSION}"
 TARGET="/root/docker-compose/embystream"
+VERSION_MARKER="${TARGET}/bin/.installed-version"
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 install -d -m 0755 \
@@ -21,7 +22,9 @@ case "$(uname -m)" in
     ;;
 esac
 
-if [[ -x "${TARGET}/bin/embystream" ]]; then
+if [[ -x "${TARGET}/bin/embystream" ]] &&
+  [[ -f "${VERSION_MARKER}" ]] &&
+  [[ "$(<"${VERSION_MARKER}")" == "${VERSION}" ]]; then
   echo "EmbyStream 已存在，跳过下载。"
 else
   temporary_dir="$(mktemp -d)"
@@ -53,7 +56,11 @@ else
     echo "发布包中没有找到 embystream。"
     exit 1
   fi
-  install -m 0755 "${binary}" "${TARGET}/bin/embystream"
+  systemctl stop embystream.service 2>/dev/null || true
+  install -m 0755 "${binary}" "${TARGET}/bin/embystream.new"
+  mv -f "${TARGET}/bin/embystream.new" "${TARGET}/bin/embystream"
+  printf '%s\n' "${VERSION}" >"${VERSION_MARKER}"
+  chmod 0644 "${VERSION_MARKER}"
 fi
 
 # The example contains no credentials. Always refresh it so an existing

@@ -53,7 +53,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | CloudDrive2 | `cloudnas/clouddrive2` | 固定当前验证过的镜像摘要 |
 | Emby | `amilys/embyserver` | 与当前神医环境兼容的第三方定制镜像，不是 Emby 官方镜像 |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
-| EmbyStream | `PiliPili-Team/EmbyStream` GitHub Release | 固定版本并校验 SHA512 |
+| EmbyStream | 上游 v0.0.43 + 本仓库刷新调度补丁 | GitHub Actions 可复现构建，固定版本并校验 SHA512 |
 
 固定摘要是为了避免 `latest` 更新后配置或插件突然不兼容。
 
@@ -85,7 +85,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 - 用户在 CD2 添加 `/GoogleDrive` 后，一键应用下载器和磁盘缓存参数。
 - 创建 Symedia、Emby 的固定目录和容器；选择备用线路时再创建 EmbyStream 服务。
 - 固定 Symedia 为当前服务器已验证的镜像摘要，避免 `latest` 漂移。
-- 用户在向导最后选择后才安装 EmbyStream v0.0.43，并校验官方 SHA512。
+- 用户在向导最后选择后才安装 EmbyStream v0.0.43-p1，并校验本仓库发布包 SHA512。p1 修复 OAuth 失败时刷新调度器忙循环导致的 CPU 和日志暴涨。
 - 在神医助手已安装后，一键应用播放相关设置和凌晨任务。
 - 检查挂载传播、路径、服务和敏感文件。
 - 可选生成不包含媒体数据的 `age` 加密配置备份。
