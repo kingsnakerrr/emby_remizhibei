@@ -1,0 +1,51 @@
+name: Test rclone sync web
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "scripts/rclone-sync-web.py"
+      - "scripts/install-rclone-sync-web.sh"
+      - "systemd/rclone-sync-web.service"
+      - "setup-wizard.sh"
+      - "healthcheck.sh"
+      - ".github/workflows/test-rclone-sync-web.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install runtime packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone python3-flask
+
+      - name: Check Python and shell syntax
+        run: |
+          python3 -m py_compile scripts/rclone-sync-web.py
+          bash -n scripts/install-rclone-sync-web.sh
+          bash -n setup-wizard.sh
+          bash -n healthcheck.sh
+
+      - name: Smoke test web service
+        run: |
+          sudo env RCLONE_SYNC_INITIAL_USER=admin \
+            RCLONE_SYNC_INITIAL_PASSWORD=admin \
+            python3 scripts/rclone-sync-web.py --init
+          sudo python3 scripts/rclone-sync-web.py \
+            --host 127.0.0.1 --port 16096 >/tmp/rclone-sync-web.log 2>&1 &
+          server_pid=$!
+          trap 'sudo kill "${server_pid}" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:16096/healthz |
+              grep -q '"ok":true'; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:16096/healthz |
+            grep -q '"ok":true'
+          curl -fsS http://127.0.0.1:16096/login |
+            grep -q '登录同步控制台'

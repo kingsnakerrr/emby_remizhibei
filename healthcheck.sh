@@ -31,6 +31,12 @@ check "宿主机 GoogleDrive/zero" test -d /CloudNAS/CloudDrive/GoogleDrive/zero
 check "Emby 能看到云盘" docker exec emby test -d /CloudNAS/CloudDrive/GoogleDrive/zero
 check "Emby 能看到本地 STRM 根目录" docker exec emby test -d /home/symedia_gd
 check "Emby 8096" curl -fsS --max-time 5 http://127.0.0.1:8096/emby/System/Info/Public
+check "Rclone" rclone version
+if systemctl list-unit-files rclone-sync-web.service >/dev/null 2>&1; then
+  check "Rclone 同步控制台服务" systemctl is-active --quiet rclone-sync-web.service
+  check "Rclone 同步控制台 6096" \
+    curl -fsS --max-time 5 http://127.0.0.1:6096/healthz
+fi
 
 if systemctl list-unit-files embystream.service >/dev/null 2>&1; then
   embystream_healthy() {

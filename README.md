@@ -6,6 +6,7 @@
 - Symedia 生成 STRM/NFO 等本地媒体元素；
 - Emby 扫描入库并直连播放；
 - EmbyStream 作为最后按需安装的可选备用线路，通过 Google Drive API 读取；
+- Rclone 网页控制台把另一团队盘中的 STRM/NFO/图片单向增量同步到本地；
 - 神医助手在用户自行安装和授权后应用已验证的播放相关设置。
 
 仓库只包含安装代码和无密码优化模板，不包含影片、STRM、NFO、封面、账号、
@@ -54,6 +55,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | Emby | `amilys/embyserver` | 与当前神医环境兼容的第三方定制镜像，不是 Emby 官方镜像 |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
 | EmbyStream | 上游 v0.0.43 + 本仓库刷新调度补丁 | GitHub Actions 可复现构建，固定版本并校验 SHA512 |
+| Rclone 同步控制台 | Debian/Ubuntu 的 `rclone`、`python3-flask` | 本仓库网页服务，端口 6096 |
 
 固定摘要是为了避免 `latest` 更新后配置或插件突然不兼容。
 
@@ -64,6 +66,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 ├── clouddrive2
 ├── emby
 ├── embystream
+├── rclone-sync
 └── symedia
 ```
 
@@ -87,6 +90,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 - 固定 Symedia 为当前服务器已验证的镜像摘要，避免 `latest` 漂移。
 - 用户在向导最后选择后才安装 EmbyStream v0.0.43-p1，并校验本仓库发布包 SHA512。p1 修复 OAuth 失败时刷新调度器忙循环导致的 CPU 和日志暴涨。
 - 在神医助手已安装后，一键应用播放相关设置和凌晨任务。
+- 安装 Rclone 和 6096 网页控制台，支持上传并验证 `rclone.conf`、浏览远程目录、手动和定时单向同步。
 - 检查挂载传播、路径、服务和敏感文件。
 - 可选生成不包含媒体数据的 `age` 加密配置备份。
 
@@ -99,6 +103,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 5. Symedia License 和需要登录的第三方服务。
 6. 神医助手 PRO 插件程序和授权；仓库不分发 PRO DLL。
 7. 可选 EmbyStream 的 Emby Token 和 Google OAuth；跳过不影响主线路。
+8. 在 6096 控制台上传 `rclone.conf`，选择备份团队盘目录和本地目标目录。
 
 账号、OAuth、License 不能写进 GitHub，即使仓库是私有的。
 
@@ -148,7 +153,11 @@ Google、CD2、Emby 的登录密码。
    docker compose up -d
    ```
 
-10. EmbyStream 是可选备用线路。完整的 Web application、OAuth Playground、
+10. 打开 `http://VPS-IP:6096` 配置团队盘元素文件同步。默认账号和密码均为
+    `admin`，首次登录必须修改。详细说明见
+    [Rclone 单向同步控制台](docs/rclone-sync-web.md)。
+
+11. EmbyStream 是可选备用线路。完整的 Web application、OAuth Playground、
     Desktop app 和 SSH 教程见
     [EmbyStream 可选备用线路](docs/embystream-optional.md)。选择安装后配置 OAuth 并运行：
 
@@ -158,7 +167,7 @@ Google、CD2、Emby 的登录密码。
     sudo ./post-auth.sh embystream
     ```
 
-11. 验收：
+12. 验收：
 
     ```bash
    sudo ./healthcheck.sh

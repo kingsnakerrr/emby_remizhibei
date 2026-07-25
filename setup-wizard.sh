@@ -154,6 +154,43 @@ else
   echo "未输入 License，暂不启动 Symedia。"
 fi
 
+echo
+echo "第四步：Rclone 单向同步控制台"
+rclone_settings="${STACK_ROOT}/rclone-sync/settings.json"
+if [[ -s "${rclone_settings}" ]]; then
+  rclone_web_user="$(jq -r '.username // "admin"' "${rclone_settings}")"
+  rclone_password_summary="保留原密码"
+  echo "检测到已有控制台账号 ${rclone_web_user}，保留原账号密码。"
+  bash "${REPO_DIR}/scripts/install-rclone-sync-web.sh"
+else
+  read -r -p "控制台账号（默认 admin）: " rclone_web_user
+  rclone_web_user="${rclone_web_user:-admin}"
+  while (( ${#rclone_web_user} < 3 )); do
+    echo "账号至少需要 3 个字符。"
+    read -r -p "控制台账号（默认 admin）: " rclone_web_user
+    rclone_web_user="${rclone_web_user:-admin}"
+  done
+  while true; do
+    read -r -s -p "控制台密码（直接回车使用 admin）: " rclone_web_password
+    echo
+    rclone_web_password="${rclone_web_password:-admin}"
+    if [[ "${rclone_web_password}" == "admin" ||
+      ${#rclone_web_password} -ge 8 ]]; then
+      break
+    fi
+    echo "自定义密码至少需要 8 个字符。"
+  done
+  RCLONE_SYNC_INITIAL_USER="${rclone_web_user}" \
+  RCLONE_SYNC_INITIAL_PASSWORD="${rclone_web_password}" \
+    bash "${REPO_DIR}/scripts/install-rclone-sync-web.sh"
+  if [[ "${rclone_web_password}" == "admin" ]]; then
+    rclone_password_summary="admin（首次登录必须修改）"
+  else
+    rclone_password_summary="安装时输入的自定义密码（不写入日志）"
+  fi
+  unset rclone_web_password
+fi
+
 if ask_yes_no "是否安装并配置可选的 EmbyStream 备用播放线路？"; then
   bash "${REPO_DIR}/scripts/install-embystream.sh"
   bash "${REPO_DIR}/scripts/show-embystream-guide.sh" "${server_ip}"
@@ -171,5 +208,17 @@ fi
 
 echo
 bash "${REPO_DIR}/healthcheck.sh" || true
+echo
+cat <<EOF
+访问地址和后续手动操作
+1. CD2：http://${server_ip}:19798（需手动登录并授权 Google Drive）
+2. Emby：http://${server_ip}:8096（需手动完成初始化和媒体库设置）
+3. Rclone 同步：http://${server_ip}:6096
+   账号：${rclone_web_user}
+   密码：${rclone_password_summary}
+   登录后上传 /root/.config/rclone/rclone.conf，选择团队盘备份目录和本地目录。
+4. Symedia：只有填写有效 License 后才会启动。
+5. EmbyStream：仅在向导中选择安装并完成 Google OAuth 后启用。
+EOF
 echo
 echo "安装向导结束。以上标为 FAIL 的项目完成相应授权后再运行 sudo ./healthcheck.sh。"
