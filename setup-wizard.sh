@@ -154,18 +154,19 @@ else
   echo "未输入 License，暂不启动 Symedia。"
 fi
 
-if ask_yes_no "是否现在配置 EmbyStream？"; then
-  cat <<EOF
-请编辑：
-  ${STACK_ROOT}/embystream/.env.private
-
-填入 Emby Token 和 Google OAuth 的 Client ID、Secret、Refresh Token。
-不要输入 Google 登录密码。
-EOF
+if ask_yes_no "是否安装并配置可选的 EmbyStream 备用播放线路？"; then
+  bash "${REPO_DIR}/scripts/install-embystream.sh"
+  bash "${REPO_DIR}/scripts/show-embystream-guide.sh" "${server_ip}"
   pause_for_user "保存 .env.private。"
   bash "${REPO_DIR}/post-auth.sh" embystream
 else
-  echo "已跳过 EmbyStream，稍后运行 sudo ./post-auth.sh embystream。"
+  cat <<EOF
+已跳过可选的 EmbyStream，不影响 CD2、Symedia 和 Emby 主线路。
+稍后安装：
+  sudo ${REPO_DIR}/scripts/install-embystream.sh
+  sudo ${REPO_DIR}/scripts/show-embystream-guide.sh ${server_ip}
+  sudo ${REPO_DIR}/post-auth.sh embystream
+EOF
 fi
 
 echo

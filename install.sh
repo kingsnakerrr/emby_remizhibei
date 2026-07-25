@@ -225,10 +225,6 @@ install -d -m 0755 \
   "${STACK_ROOT}/emby/config/plugins/configurations" \
   "${STACK_ROOT}/emby/config/mediainfo-json" \
   "${STACK_ROOT}/symedia/config" \
-  "${STACK_ROOT}/embystream/bin" \
-  "${STACK_ROOT}/embystream/config/ssl" \
-  "${STACK_ROOT}/embystream/auth" \
-  "${STACK_ROOT}/embystream/logs" \
   /CloudNAS \
   /home/symedia_gd \
   /home/symedia_jav
@@ -252,8 +248,6 @@ copy_if_missing \
 
 chmod 0600 "${STACK_ROOT}/symedia/.env"
 
-"${REPO_DIR}/scripts/install-embystream.sh"
-
 cd "${STACK_ROOT}/clouddrive2"
 docker compose up -d
 
@@ -267,3 +261,4 @@ echo "2. 完成后运行: ${REPO_DIR}/post-auth.sh cd2"
 echo "3. 打开 http://VPS-IP:8096 完成 Emby 初始化。"
 echo "4. 神医助手安装授权后运行: ${REPO_DIR}/post-auth.sh strm-assistant"
 echo "5. 填写 ${STACK_ROOT}/symedia/.env 后再启动 Symedia。"
+echo "6. EmbyStream 是可选备用线路，在 setup-wizard.sh 最后按需安装。"

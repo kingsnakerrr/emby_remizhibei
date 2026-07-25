@@ -7,6 +7,12 @@ BASE_URL="https://github.com/PiliPili-Team/EmbyStream/releases/download/${VERSIO
 TARGET="/root/docker-compose/embystream"
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
+install -d -m 0755 \
+  "${TARGET}/bin" \
+  "${TARGET}/config/ssl" \
+  "${TARGET}/auth" \
+  "${TARGET}/logs"
+
 case "$(uname -m)" in
   x86_64|amd64) ;;
   *)

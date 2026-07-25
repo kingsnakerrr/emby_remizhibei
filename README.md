@@ -5,7 +5,7 @@
 - CloudDrive2 挂载 Google 团队盘；
 - Symedia 生成 STRM/NFO 等本地媒体元素；
 - Emby 扫描入库并直连播放；
-- EmbyStream 通过 Google Drive API 提供另一条读取线路；
+- EmbyStream 作为最后按需安装的可选备用线路，通过 Google Drive API 读取；
 - 神医助手在用户自行安装和授权后应用已验证的播放相关设置。
 
 仓库只包含安装代码和无密码优化模板，不包含影片、STRM、NFO、封面、账号、
@@ -83,9 +83,9 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 - 预先设置 CD2 挂载点 `/CloudNAS/CloudDrive`。
 - 预设 CD2 系统优化参数。
 - 用户在 CD2 添加 `/GoogleDrive` 后，一键应用下载器和磁盘缓存参数。
-- 创建 Symedia、Emby、EmbyStream 的目录、容器/服务骨架。
+- 创建 Symedia、Emby 的固定目录和容器；选择备用线路时再创建 EmbyStream 服务。
 - 固定 Symedia 为当前服务器已验证的镜像摘要，避免 `latest` 漂移。
-- 安装 EmbyStream v0.0.43 并校验官方 SHA512。
+- 用户在向导最后选择后才安装 EmbyStream v0.0.43，并校验官方 SHA512。
 - 在神医助手已安装后，一键应用播放相关设置和凌晨任务。
 - 检查挂载传播、路径、服务和敏感文件。
 - 可选生成不包含媒体数据的 `age` 加密配置备份。
@@ -98,7 +98,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 4. Emby 第一次创建管理员，或恢复加密的完整 `/config`。
 5. Symedia License 和需要登录的第三方服务。
 6. 神医助手 PRO 插件程序和授权；仓库不分发 PRO DLL。
-7. EmbyStream 的 Emby Token 和 Google OAuth。
+7. 可选 EmbyStream 的 Emby Token 和 Google OAuth；跳过不影响主线路。
 
 账号、OAuth、License 不能写进 GitHub，即使仓库是私有的。
 
@@ -148,9 +148,13 @@ Google、CD2、Emby 的登录密码。
    docker compose up -d
    ```
 
-10. 配置 EmbyStream OAuth 后运行：
+10. EmbyStream 是可选备用线路。完整的 Web application、OAuth Playground、
+    Desktop app 和 SSH 教程见
+    [EmbyStream 可选备用线路](docs/embystream-optional.md)。选择安装后配置 OAuth 并运行：
 
     ```bash
+    sudo ./scripts/install-embystream.sh
+    sudo ./scripts/show-embystream-guide.sh VPS-IP
     sudo ./post-auth.sh embystream
     ```
 
