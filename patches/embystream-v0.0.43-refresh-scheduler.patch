@@ -1,0 +1,46 @@
+diff --git a/src/core/backend/google_drive_auth.rs b/src/core/backend/google_drive_auth.rs
+index b609eca..8da18d6 100644
+--- a/src/core/backend/google_drive_auth.rs
++++ b/src/core/backend/google_drive_auth.rs
+@@ -226,6 +226,14 @@ pub async fn schedule_google_drive_token_refreshes(state: Arc<AppState>) {
+                 }
+             }
+         }
++
++        // A failed refresh may leave the configured token due. Always yield
++        // after a due batch so a stale token or bookkeeping bug cannot turn
++        // the scheduler into a CPU/log busy loop.
++        tokio::time::sleep(std_duration_from_chrono(Duration::seconds(
++            REFRESH_SCHEDULER_MIN_SLEEP_SECS,
++        )))
++        .await;
+     }
+ }
+ 
+@@ -282,9 +290,13 @@ fn scheduled_refresh_delay(
+         return Duration::seconds(REFRESH_SCHEDULER_IDLE_SECS);
+     }
+ 
++    let backoff_key = format!(
++        "google-drive-token:{}",
++        node_uuid.to_ascii_lowercase()
++    );
+     if let Some(backoff) = state
+         .google_drive_refresh_backoff_until
+-        .get(node_uuid)
++        .get(&backoff_key)
+         .map(|value| *value.value() - now)
+         .filter(|remaining| *remaining > Duration::zero())
+     {
+@@ -505,7 +517,10 @@ host = ""
+         let state = test_state_with_node(node.clone()).await;
+         state
+             .google_drive_refresh_backoff_until
+-            .insert("node-1".to_string(), now + Duration::seconds(42));
++            .insert(
++                "google-drive-token:node-1".to_string(),
++                now + Duration::seconds(42),
++            );
+ 
+         assert_eq!(
+             scheduled_refresh_delay(&state, &node, now),
