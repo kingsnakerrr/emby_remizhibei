@@ -43,6 +43,7 @@ jobs:
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
           module.SETTINGS_FILE = Path("/tmp/rclone-sync-settings-test.json")
+          module.LOG_FILE = Path("/tmp/rclone-sync-live-test.log")
           module.settings = module.settings.copy()
           module.settings["must_change_password"] = False
           module.rclone_remotes = lambda: ["test_remote"]
@@ -122,7 +123,34 @@ jobs:
           assert response.status_code == 302
           saved = json.loads(module.SETTINGS_FILE.read_text())
           assert saved["mode"] == "copy"
+
+          module.LOG_FILE.write_text(
+              "\n".join(f"line-{index:04d}" for index in range(1000)),
+              encoding="utf-8",
+          )
+          module.state.update(
+              {
+                  "running": True,
+                  "pid": 12345,
+                  "last_started": "2026-07-26T10:00:00",
+                  "last_finished": None,
+                  "last_exit_code": None,
+                  "last_message": "正在同步测试",
+              }
+          )
+          live = client.get("/api/live")
+          assert live.status_code == 200
+          live_data = live.get_json()
+          assert live_data["status"]["running"] is True
+          assert live_data["status"]["pid"] == 12345
+          assert "line-0999" in live_data["log"]
+          assert "line-0000" not in live_data["log"]
+          dashboard = client.get("/").get_data(as_text=True)
+          assert 'id="sync-log"' in dashboard
+          assert "setInterval(refreshLiveStatus, 2000)" in dashboard
+
           module.SETTINGS_FILE.unlink()
+          module.LOG_FILE.unlink()
           PY
 
       - name: Smoke test web service

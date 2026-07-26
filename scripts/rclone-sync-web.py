@@ -154,6 +154,7 @@ sync_process: subprocess.Popen | None = None
 stop_event = threading.Event()
 browse_cache_lock = threading.RLock()
 browse_cache: OrderedDict[tuple[str, str], tuple[float, list[dict]]] = OrderedDict()
+log_event_lock = threading.RLock()
 
 app = Flask(__name__)
 app.secret_key = settings["secret_key"]
@@ -188,8 +189,12 @@ BASE_TEMPLATE = r"""
       padding:10px 15px;background:var(--blue);color:#fff;font-weight:700;cursor:pointer}
     .btn.secondary{background:#53657c}.btn.danger{background:var(--red)}
     .btn.good{background:var(--green)}.muted{color:var(--muted)}.warn{color:var(--amber)}
-    .bad{color:var(--red)}.ok{color:var(--green)}pre{white-space:pre-wrap;max-height:420px;
-      overflow:auto;background:#0e1726;color:#d7e3f3;padding:14px;border-radius:9px;font-size:12px}
+    .bad{color:var(--red)}.ok{color:var(--green)}
+    .log-window{white-space:pre-wrap;min-height:560px;height:62vh;max-height:1200px;
+      resize:vertical;overflow:auto;background:#0e1726;color:#d7e3f3;padding:14px;
+      border-radius:9px;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}
+    .log-toolbar{display:flex;justify-content:space-between;gap:12px;align-items:center;
+      margin-bottom:8px;flex-wrap:wrap}
     .flash{padding:10px 13px;margin:0 0 14px;border-radius:8px;background:#e7f1ff}
     .dir{display:block;width:100%;text-align:left;background:#f5f8fc;color:#234;
       border:1px solid var(--line);padding:8px;margin:5px 0;border-radius:7px;cursor:pointer}
@@ -351,30 +356,53 @@ def sync_status() -> dict:
     return snapshot
 
 
+def read_log_tail(max_bytes: int = 512 * 1024, max_lines: int = 800) -> str:
+    try:
+        with LOG_FILE.open("rb") as log_file:
+            log_file.seek(0, os.SEEK_END)
+            file_size = log_file.tell()
+            start = max(0, file_size - max_bytes)
+            log_file.seek(start)
+            raw = log_file.read()
+        text = raw.decode("utf-8", errors="replace")
+        if start > 0 and "\n" in text:
+            text = text.split("\n", 1)[1]
+        return "\n".join(text.splitlines()[-max_lines:])
+    except OSError:
+        return ""
+
+
+def append_log_event(message: str) -> None:
+    timestamp = datetime.now().isoformat(timespec="seconds").replace("T", " ")
+    with log_event_lock:
+        try:
+            with LOG_FILE.open("a", encoding="utf-8") as log_file:
+                log_file.write(f"\n===== [{timestamp}] {message} =====\n")
+        except OSError:
+            app.logger.warning("无法写入同步事件日志：%s", message)
+
+
 @app.route("/")
 def dashboard():
     remotes = rclone_remotes()
     status = sync_status()
-    try:
-        log_text = "\n".join(LOG_FILE.read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines()[-250:])
-    except OSError:
-        log_text = ""
+    log_text = read_log_tail()
     return page(
         "控制台",
         """
         <div class="grid">
           <section class="card">
             <h2>运行状态</h2>
-            <div class="status {{ 'ok' if status.running else '' }}">
+            <div id="sync-state" class="status {{ 'ok' if status.running else '' }}">
               {{ '同步中' if status.running else '空闲' }}
             </div>
-            <p>上次开始：{{ status.last_started or '无' }}<br>
-            上次完成：{{ status.last_finished or '无' }}<br>
-            退出码：{{ status.last_exit_code if status.last_exit_code is not none else '无' }}<br>
-            本地剩余：{{ status.local_free or '未知' }}</p>
-            <p class="muted">{{ status.last_message }}</p>
+            <p>开始时间：<span id="last-started">{{ status.last_started or '无' }}</span><br>
+            结束时间：<span id="last-finished">{{ status.last_finished or '无' }}</span><br>
+            退出码：<span id="last-exit-code">{{ status.last_exit_code if status.last_exit_code is not none else '无' }}</span><br>
+            进程 PID：<span id="sync-pid">{{ status.pid or '无' }}</span><br>
+            本地剩余：<span id="local-free">{{ status.local_free or '未知' }}</span></p>
+            <p id="sync-message" class="muted">{{ status.last_message }}</p>
+            <p id="live-updated" class="small muted">实时状态连接中……</p>
             <form method="post" action="{{ url_for('start_sync') }}" style="display:inline">
               <input type="hidden" name="csrf" value="{{ csrf }}">
               <button class="btn good" type="submit">立即同步</button>
@@ -454,8 +482,11 @@ def dashboard():
           </section>
 
           <section class="card wide">
-            <h2>最近日志</h2>
-            <pre>{{ log_text or '暂无日志' }}</pre>
+            <div class="log-toolbar">
+              <h2 style="margin:0">实时同步日志</h2>
+              <span class="small muted">每 2 秒自动更新；向上滚动时不会强制回到底部</span>
+            </div>
+            <pre id="sync-log" class="log-window">{{ log_text or '暂无日志' }}</pre>
           </section>
         </div>
         <script>
@@ -520,6 +551,51 @@ def dashboard():
           if (!data.dirs.length) box.append('当前目录没有子目录。');
         }
         browse.addEventListener('click', ()=>loadDirs(1));
+
+        const logBox = document.getElementById('sync-log');
+        let liveRequestRunning = false;
+        async function refreshLiveStatus() {
+          if (liveRequestRunning) return;
+          liveRequestRunning = true;
+          const updated = document.getElementById('live-updated');
+          try {
+            const response = await fetch('/api/live', {cache: 'no-store'});
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || '读取失败');
+            const status = data.status;
+            const stateBox = document.getElementById('sync-state');
+            stateBox.textContent = status.running ? '同步中' : '空闲';
+            stateBox.className = 'status' + (status.running ? ' ok' : '');
+            document.getElementById('last-started').textContent =
+              status.last_started || '无';
+            document.getElementById('last-finished').textContent =
+              status.last_finished || '无';
+            document.getElementById('last-exit-code').textContent =
+              status.last_exit_code === null || status.last_exit_code === undefined
+                ? '无' : status.last_exit_code;
+            document.getElementById('sync-pid').textContent = status.pid || '无';
+            document.getElementById('local-free').textContent =
+              status.local_free || '未知';
+            document.getElementById('sync-message').textContent =
+              status.last_message || '';
+            updated.textContent = '最后刷新：' +
+              new Date().toLocaleTimeString() + '（服务器：' + data.server_time + '）';
+            const followBottom = logBox.scrollHeight - logBox.scrollTop -
+              logBox.clientHeight < 90;
+            const nextLog = data.log || '暂无日志';
+            if (logBox.textContent !== nextLog) {
+              logBox.textContent = nextLog;
+              if (followBottom) logBox.scrollTop = logBox.scrollHeight;
+            }
+          } catch (error) {
+            updated.textContent = '实时连接暂时中断，正在自动重试：' + error.message;
+          } finally {
+            liveRequestRunning = false;
+          }
+        }
+        logBox.scrollTop = logBox.scrollHeight;
+        refreshLiveStatus();
+        setInterval(refreshLiveStatus, 2000);
         </script>
         """,
         settings=settings,
@@ -527,6 +603,15 @@ def dashboard():
         remotes=remotes,
         log_text=log_text,
         csrf=csrf_token(),
+    )
+
+
+@app.route("/api/live")
+def live_status():
+    return jsonify(
+        status=sync_status(),
+        log=read_log_tail(),
+        server_time=datetime.now().isoformat(timespec="seconds").replace("T", " "),
     )
 
 
@@ -756,6 +841,7 @@ def monitor_process(process: subprocess.Popen) -> None:
             }
         )
         write_json(STATE_FILE, state)
+    append_log_event(f"同步任务结束，退出码={exit_code}")
     sync_process = None
 
 
@@ -773,6 +859,12 @@ def launch_sync() -> None:
         start_new_session=True,
     )
     sync_process = process
+    with settings_lock:
+        current_mode = settings.get("mode", "copy")
+        current_remote = settings.get("remote", "")
+        current_remote_path = settings.get("remote_path", "")
+        current_local_path = settings.get("local_path", "")
+    mode_name = "镜像同步" if current_mode == "sync" else "增量复制"
     with state_lock:
         state.update(
             {
@@ -780,10 +872,14 @@ def launch_sync() -> None:
                 "pid": process.pid,
                 "last_started": datetime.now().isoformat(timespec="seconds"),
                 "last_exit_code": None,
-                "last_message": "正在扫描并增量同步",
+                "last_message": f"正在扫描并执行{mode_name}",
             }
         )
         write_json(STATE_FILE, state)
+    append_log_event(
+        f"同步任务开始，PID={process.pid}，模式={mode_name}，"
+        f"来源={current_remote}:{current_remote_path}，目标={current_local_path}"
+    )
     threading.Thread(
         target=monitor_process, args=(process,), daemon=True
     ).start()
@@ -808,6 +904,7 @@ def stop_sync():
         if process is None or process.poll() is not None:
             raise ValueError("当前没有运行中的同步任务。")
         os.killpg(process.pid, signal.SIGTERM)
+        append_log_event(f"用户请求停止同步任务，PID={process.pid}")
         flash("已发送停止信号。")
     except (ValueError, ProcessLookupError) as error:
         flash(str(error))
