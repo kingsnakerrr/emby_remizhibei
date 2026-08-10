@@ -5,6 +5,7 @@
 - CloudDrive2 挂载 Google 团队盘；
 - Symedia 生成 STRM/NFO 等本地媒体元素；
 - Emby 扫描入库并直连播放；
+- Emby 播放预热器自动预读冷片源头尾，缓解第一次起播慢；
 - EmbyStream 作为最后按需安装的可选备用线路，通过 Google Drive API 读取；
 - Rclone 网页控制台把另一团队盘中的 STRM/NFO/图片单向增量同步到本地；
 - 神医助手在用户自行安装和授权后应用已验证的播放相关设置。
@@ -53,6 +54,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | Docker/Compose | Docker 官方 apt 仓库 | 安装 Engine、Buildx、Compose v2 |
 | CloudDrive2 | `cloudnas/clouddrive2` | 固定当前验证过的镜像摘要 |
 | Emby | `amilys/embyserver` | 与当前神医环境兼容的第三方定制镜像，不是 Emby 官方镜像 |
+| Emby 播放预热器 | 本仓库 `scripts/install-emby-play-prewarm.sh` | 默认安装为 systemd 服务，播放时预读 CD2 媒体头尾 Range |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
 | EmbyStream | 上游 v0.0.43 + 本仓库刷新调度补丁 | GitHub Actions 可复现构建，固定版本并校验 SHA512 |
 | Rclone 同步控制台 | Debian/Ubuntu 的 `rclone`、`python3-flask` | 本仓库网页服务，端口 6096 |
@@ -65,6 +67,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 /root/docker-compose/
 ├── clouddrive2
 ├── emby
+├── emby-play-prewarm
 ├── embystream
 ├── rclone-sync
 └── symedia
@@ -87,6 +90,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 - 预设 CD2 系统优化参数。
 - 用户在 CD2 添加 `/GoogleDrive` 后，一键应用下载器和磁盘缓存参数。
 - 创建 Symedia、Emby 的固定目录和容器；选择备用线路时再创建 EmbyStream 服务。
+- 默认安装 Emby 播放预热器；CD2、Emby 和媒体库准备好后自动生效。
 - 固定 Symedia 为当前服务器已验证的镜像摘要，避免 `latest` 漂移。
 - 用户在向导最后选择后才安装 EmbyStream v0.0.43-p1，并校验本仓库发布包 SHA512。p1 修复 OAuth 失败时刷新调度器忙循环导致的 CPU 和日志暴涨。
 - 在神医助手已安装后，一键应用播放相关设置和凌晨任务。
@@ -172,6 +176,53 @@ Google、CD2、Emby 的登录密码。
     ```bash
    sudo ./healthcheck.sh
    ```
+
+## Emby 播放预热器
+
+一键安装会默认安装并启动 `emby-play-prewarm.service`。它可以先于 CD2 授权和 Emby 媒体库配置安装；没有播放日志时只会等待，不会影响正式播放。
+
+它的作用是监听 Emby 的真实播放请求：客户端点击播放并触发 `PlaybackInfo?IsPlayback=true` 后，后台提前读取该影片的头部 8 MiB 和尾部 1 MiB，让 CD2/团队盘冷片源先热起来。直连 `8096`、HTTPS `443`、Nginx 反代、BWG/BWGG 中转都能触发，只要最终请求进入同一台 Emby。
+
+检查服务是否运行：
+
+```bash
+systemctl is-active emby-play-prewarm.service
+```
+
+输出 `active` 表示服务正在运行。也可以用总体验收：
+
+```bash
+sudo ./healthcheck.sh
+```
+
+其中应看到：
+
+```text
+[OK]   Emby 播放预热器
+```
+
+检查预热是否真的生效：
+
+```bash
+journalctl -u emby-play-prewarm.service -f
+```
+
+然后用 Emby、小幻、RodelPlayer 或其他客户端点击一部电影播放。看到类似下面内容表示已经捕获并预热成功：
+
+```text
+schedule item=564916 user=...
+prewarm item=564916 container=mkv head={'status': 206, 'bytes': 8388608, ...} tail={'status': 206, 'bytes': 1048576, ...}
+```
+
+其中 `head status=206` 和 `tail status=206` 表示头尾 Range 都读成功。完整说明见
+[Emby 播放预热器](docs/emby-play-prewarm.md)。
+
+手动重装或卸载：
+
+```bash
+sudo ./post-auth.sh play-prewarm
+sudo ./scripts/install-emby-play-prewarm.sh uninstall
+```
 
 ## 神医助手导入
 
@@ -282,4 +333,3 @@ Google 账号本身不能在没有登录/授权的情况下创建。用户完成
 - 不要提交 `.env.private`、OAuth JSON、Token、License、Emby 数据库。
 - 建议开启 GitHub Secret Scanning。
 - 管理端口 19798、60002 不应直接对全网开放。
-
