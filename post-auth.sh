@@ -19,11 +19,14 @@ case "${ACTION}" in
   embystream)
     "${REPO_DIR}/scripts/configure-embystream.sh"
     ;;
+  play-prewarm)
+    "${REPO_DIR}/scripts/install-emby-play-prewarm.sh"
+    ;;
   symedia)
     "${REPO_DIR}/scripts/audit-symedia.sh"
     ;;
   *)
-    echo "用法: $0 {cd2|strm-assistant|embystream|symedia}"
+    echo "用法: $0 {cd2|strm-assistant|embystream|play-prewarm|symedia}"
     exit 2
     ;;
 esac
