@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 if [[ ${EUID} -ne 0 ]]; then
-  echo "请使用 root 或 sudo 运行。"
+  echo "Please run as root or with sudo."
   exit 1
 fi
 
@@ -25,8 +25,11 @@ case "${ACTION}" in
   symedia)
     "${REPO_DIR}/scripts/audit-symedia.sh"
     ;;
+  home-media-backup)
+    "${REPO_DIR}/scripts/install-home-media-backup.sh" "${2:-}"
+    ;;
   *)
-    echo "用法: $0 {cd2|strm-assistant|embystream|play-prewarm|symedia}"
+    echo "Usage: $0 {cd2|strm-assistant|embystream|play-prewarm|symedia|home-media-backup}"
     exit 2
     ;;
 esac
