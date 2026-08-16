@@ -1,84 +1,66 @@
-# Rclone 单向同步控制台
+# Rclone 多任务同步控制台
 
-控制台用于把另一台机器上传到 Google 团队盘的 STRM、NFO、封面、背景图和
-字幕增量下载到本机固定目录。它不占用 CloudDrive2 的本地挂载数量，也不会
-下载影片本体，除非源目录本身包含影片并且关闭了“只传元素文件”选项。
+这个控制台用于把 Google 团队盘里的媒体元数据目录同步到本机固定目录。新版已经改成多任务模式，避免把整个 `/home` 当成同步目标。
+
+## 重要安全规则
+
+不要把同步目标设置成 `/home`。
+
+原因是 `rclone sync` 是镜像同步，会删除目标端里“云端没有”的文件。如果目标是 `/home`，本地生成的 STRM、NFO、封面、挂载目录和其他应用数据都有被删除的风险。
+
+现在程序只允许目标位于：
+
+```text
+/home/symedia_gd
+/home/symedia_jav
+```
+推荐拆成两个任务：
+
+| 任务 | 云端目录示例 | 本地目录 |
+| --- | --- | --- |
+| symedia_gd | `media/symedia_gd` | `/home/symedia_gd` |
+| symedia_jav | `media/symedia_jav` | `/home/symedia_jav` |
+
+这样每个任务只管理自己的目录，不会干涉 `/home` 下其他文件夹。
+
+## 同步模式
+
+- `copy`：增量复制，只新增或覆盖变化文件，不删除本地多余文件。默认推荐。
+- `sync`：镜像同步，会删除本任务目标目录内云端没有的文件。只在确认目录完全对应时使用。
+
+即使使用 `sync`，也只应该用于 `/home/symedia_gd` 或 `/home/symedia_jav` 这样的精确目录，不要用于 `/home`。
 
 ## 安装和访问
 
-一键向导会自动安装 `rclone`、网页服务和 systemd 服务：
+安装脚本会部署到：
+
+```text
+/root/docker-compose/rclone-sync/
+```
+
+服务名：
+
+```text
+rclone-sync-web.service
+```
+
+访问地址：
 
 ```text
 http://VPS-IP:6096
 ```
 
-默认账号、密码均为 `admin`。默认密码只能进入账号修改页，修改为至少 8 位
-的新密码后才能使用同步功能。安装向导也允许直接输入自定义账号密码。
-
-运行目录：
-
-```text
-/root/docker-compose/rclone-sync/
-├── app.py
-├── settings.json
-├── state.json
-└── logs/sync.log
-```
-
-敏感配置固定保存在：
-
-```text
-/root/.config/rclone/rclone.conf
-```
-
-网页不会显示配置中的 Token、Client Secret 或 Refresh Token，只会调用
-`rclone listremotes` 读取 remote 名称。
+默认账号和密码都是 `admin`。首次登录必须修改密码后才能继续使用。
 
 ## 使用步骤
 
-1. 在另一台已完成 Google Drive OAuth 的电脑或 VPS 运行 `rclone config`。
-2. 选择 Google Drive，并在向导中选择对应 Shared Drive/团队盘。
-3. 把生成的 `/root/.config/rclone/rclone.conf` 下载到电脑。
-4. 登录 6096 控制台，在“上传 rclone.conf”中上传。
-5. 从下拉框选择 remote，点击“读取目录”浏览并选择备份目录。目录按名称排序并
-   显示序号，可选每页 20、50、100 或全部，并可使用上一页、下一页和手动刷新。
-   读取结果缓存 5 分钟，因此翻页不会反复扫描团队盘。
-6. 填写本机目标，例如：
-
-   ```text
-   /home/symedia_gd
-   ```
-
-7. 首次保持“增量复制”，勾选“只传 STRM、NFO、图片和字幕”。
-8. 点击“立即同步”，观察日志和本机剩余空间。运行状态和日志每 2 秒自动更新，
-   会显示开始时间、结束时间、退出码、PID 与任务消息。日志窗口可以拉高和滚动；
-   向上查看历史时不会被新日志强制拉回底部。
-9. 验证目录、STRM 内容与 Emby 播放正常后，再启用定时同步。
-
-## 同步语义
-
-- `增量复制` 对应 `rclone copy`：新增和更新云端文件，但不删除本机文件。
-  这是默认和推荐模式。
-- `镜像同步` 对应 `rclone sync --delete-after`：让本地与云端完全一致，
-  会删除本地多余文件。网页要求再次勾选确认，并设置最多删除 10000 个文件
-  的安全上限。保存镜像模式后，确认状态会随设置保留；切回增量复制后自动取消。
-- Google Drive 与 rclone 没有本控制台可用的秒级文件事件推送。因此这里的
-  “实时更新”是轮询同步，默认每 10 分钟检查一次，可设置为 1～1440 分钟。
-
-对于几十万小文件，控制台默认 `transfers=4`、`checkers=8`，并且不使用
-`--fast-list`，避免低内存 VPS 一次把整个目录树装入内存。第一次扫描可能较慢，
-后续只传发生变化的文件。
-
-## STRM 路径要求
-
-复制来的 STRM 必须指向本机可以访问的影片路径。例如：
-
-```text
-/CloudNAS/CloudDrive/GoogleDrive/zero/电影/影片.mkv
-```
-
-如果 STRM 写的是另一台 VPS 的域名、IP 或不同挂载路径，Emby 虽然能入库，
-但无法播放，需要先批量转换成当前机器的路径。
+1. 准备好 `/root/.config/rclone/rclone.conf`，里面应有 Google Drive 团队盘 remote。
+2. 登录 6096 控制台。
+3. 上传或确认 rclone 配置。
+4. 分别配置 `symedia_gd` 和 `symedia_jav` 两个任务。
+5. 本地目录分别填 `/home/symedia_gd`、`/home/symedia_jav`。
+6. 首次建议使用 `copy` 模式跑一遍。
+7. 确认文件和 Emby 入库都正常后，再决定是否启用定时同步。
 
 ## 运维命令
 
@@ -87,7 +69,16 @@ systemctl status rclone-sync-web
 journalctl -u rclone-sync-web -n 100 --no-pager
 tail -n 100 /root/docker-compose/rclone-sync/logs/sync.log
 systemctl restart rclone-sync-web
+systemctl stop rclone-sync-web
 ```
 
-如果 6096 暴露在公网，必须修改默认密码，并建议使用防火墙限制来源 IP 或放在
-带 HTTPS 的反向代理后面。不要把 `rclone.conf` 提交到 GitHub。
+## 升级旧配置
+
+旧版单任务配置会自动迁移成多任务配置。
+
+如果旧配置目标是 `/home`，新版不会继续使用这个危险目标。请在控制台里分别配置：
+
+```text
+/home/symedia_gd
+/home/symedia_jav
+```

@@ -333,3 +333,15 @@ Google 账号本身不能在没有登录/授权的情况下创建。用户完成
 - 不要提交 `.env.private`、OAuth JSON、Token、License、Emby 数据库。
 - 建议开启 GitHub Secret Scanning。
 - 管理端口 19798、60002 不应直接对全网开放。
+## Rclone 多任务同步注意事项
+
+Rclone 同步控制台已经改为多任务模式。不要把同步目标设置为 `/home`，因为 `rclone sync` 会删除目标端中云端没有的文件，可能误删本地生成的 STRM、NFO、封面、挂载目录和其他应用数据。
+
+推荐拆成两个独立任务：
+
+| 任务 | 云端目录示例 | 本地目录 |
+| --- | --- | --- |
+| symedia_gd | `media/symedia_gd` | `/home/symedia_gd` |
+| symedia_jav | `media/symedia_jav` | `/home/symedia_jav` |
+
+新版控制台会拒绝 `/home` 作为同步目标，只允许 `/home/symedia_gd` 和 `/home/symedia_jav` 及其子目录。
