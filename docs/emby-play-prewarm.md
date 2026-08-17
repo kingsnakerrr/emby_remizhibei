@@ -104,6 +104,12 @@ sudo ./healthcheck.sh
 journalctl -u emby-play-prewarm.service -f
 ```
 
+Token 检查：
+
+- 启动日志里出现 `token_seeded=True`，表示预热器已经从最近的 Emby 播放日志里读取到可用 token。
+- 只有 `schedule item=...` 只能说明捕获到了播放动作，不代表已经预读成功。
+- 必须看到 `prewarm item=... head={'status': 206, 'bytes': 8388608, ...}`，才表示真实读取了视频头部。
+
 用 Emby、小幻、RodelPlayer 或其他客户端点击一部电影播放。看到类似下面两行，说明已经捕获到播放请求并开始预热：
 
 ```text

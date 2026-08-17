@@ -79,10 +79,41 @@ def fallback_token() -> str:
 
 
 FALLBACK_TOKEN = fallback_token()
+LAST_TOKEN = FALLBACK_TOKEN
+TOKEN_LOCK = threading.Lock()
 
 
 def clean_token(token: str) -> str:
     return "".join(ch for ch in urllib.parse.unquote(token) if ch.isalnum())
+
+
+def remember_token(token: str) -> str:
+    global LAST_TOKEN
+    token = clean_token(token)
+    if len(token) >= 20:
+        with TOKEN_LOCK:
+            LAST_TOKEN = token
+    return token
+
+
+def current_token() -> str:
+    with TOKEN_LOCK:
+        return LAST_TOKEN
+
+
+def seed_token_from_log() -> None:
+    try:
+        with open(LOG_PATH, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 2 * 1024 * 1024))
+            text = f.read().decode("utf-8", "ignore")
+    except OSError:
+        return
+    for first, second in TOKEN_RE.findall(text):
+        token = clean_token(first or second)
+        if len(token) >= 20:
+            remember_token(token)
 
 
 def token_from_line(line: str) -> str:
@@ -90,8 +121,8 @@ def token_from_line(line: str) -> str:
     for first, second in matches:
         token = clean_token(first or second)
         if len(token) >= 20:
-            return token
-    return FALLBACK_TOKEN
+            return remember_token(token)
+    return current_token()
 
 
 def user_from_line(line: str) -> str:
@@ -203,9 +234,11 @@ def follow(path: str):
 
 
 def main() -> None:
-    log.info("started, watching %s", LOG_PATH)
+    seed_token_from_log()
+    log.info("started, watching %s token_seeded=%s", LOG_PATH, bool(current_token()))
     while True:
         for line in follow(LOG_PATH):
+            token_from_line(line)
             match = PLAYBACK_RE.search(line)
             if not match or "IsPlayback=true" not in line:
                 continue
