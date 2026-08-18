@@ -216,6 +216,15 @@ install_play_prewarm() {
   fi
 }
 
+install_strm_image_fixer() {
+  if [[ -x "${REPO_DIR}/scripts/install-emby-strm-image-fixer.sh" ]]; then
+    echo "安装 Emby STRM 图片补齐器……"
+    bash "${REPO_DIR}/scripts/install-emby-strm-image-fixer.sh"
+  else
+    echo "未找到 STRM 图片补齐器安装脚本，跳过。"
+  fi
+}
+
 install_packages
 
 if [[ -f /var/run/reboot-required ]]; then
@@ -226,6 +235,7 @@ fi
 if [[ -n "${RESTORE_DIR}" ]]; then
   bash "${REPO_DIR}/scripts/restore-encrypted.sh" "${RESTORE_DIR}"
   install_play_prewarm
+  install_strm_image_fixer
   bash "${REPO_DIR}/healthcheck.sh"
   exit 0
 fi
@@ -265,6 +275,7 @@ cd "${STACK_ROOT}/emby"
 docker compose up -d
 
 install_play_prewarm
+install_strm_image_fixer
 
 echo
 echo "基础安装完成。"
@@ -274,5 +285,6 @@ echo "3. 打开 http://VPS-IP:8096 完成 Emby 初始化。"
 echo "4. 神医助手安装授权后运行: ${REPO_DIR}/post-auth.sh strm-assistant"
 echo "5. 填写 ${STACK_ROOT}/symedia/.env 后再启动 Symedia。"
 echo "6. Emby 播放预热器已默认安装；CD2、Emby 和媒体库准备好后会自动生效。"
-echo "7. EmbyStream 是可选备用线路，在 setup-wizard.sh 最后按需安装。"
-echo "8. Rclone 单向同步控制台由向导自动安装，端口为 6096。"
+echo "7. STRM 图片补齐器已默认安装；多版本缺封面时会自动补齐。"
+echo "8. EmbyStream 是可选备用线路，在 setup-wizard.sh 最后按需安装。"
+echo "9. Rclone 单向同步控制台由向导自动安装，端口为 6096。"
