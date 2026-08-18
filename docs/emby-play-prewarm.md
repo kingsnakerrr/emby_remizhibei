@@ -2,7 +2,7 @@
 
 `emby-play-prewarm` 是一个轻量 systemd 服务，用来缓解 CloudDrive2/团队盘冷片源第一次起播慢的问题。
 
-它不接管 Emby 端口，不改 `8096`、`443`、反代或客户端播放地址。服务只监听 Emby 日志：当客户端真正点击播放并请求 `PlaybackInfo?IsPlayback=true` 时，后台提前读取该影片的头部和尾部 Range，让 CD2/网盘链路先热起来。
+它不接管 Emby 端口，不改 `8096`、`443`、反代或客户端播放地址。服务只监听 Emby 日志：当客户端真正点击播放并请求 `PlaybackInfo?IsPlayback=true` 时，后台提前读取该影片的头部、尾部和恢复进度附近 Range，让 CD2/rclone/网盘链路先热起来。
 
 ## 什么时候会生效
 
@@ -21,6 +21,7 @@
 
 - 没看过的冷电影第一次起播要等 8-20 秒。
 - 小幻/RodelPlayer 播放大 MKV 前会读头、读尾、再重新拉头，导致转圈。
+- 恢复到上次播放进度时，客户端会先读中间位置附近的数据，导致又等一轮。
 - VPS 本机测试很快，但本地客户端第一次播放明显慢。
 
 它不能完全消除播放器自身分析、代理/Mihomo、家庭宽带到 VPS 链路造成的延迟。
@@ -114,7 +115,7 @@ Token 检查：
 
 ```text
 schedule item=564916 user=...
-prewarm item=564916 container=mkv head={'status': 206, 'bytes': 33554432, ...} tail={'status': 206, 'bytes': 4194304, ...}
+prewarm item=564916 container=mkv head={'status': 206, 'bytes': 33554432, ...} tail={'status': 206, 'bytes': 4194304, ...} resume={'status': 206, 'bytes': 67108864, ...}
 ```
 
 重点看 `prewarm item=...` 这一行：
@@ -123,6 +124,8 @@ prewarm item=564916 container=mkv head={'status': 206, 'bytes': 33554432, ...} t
 - `head bytes=33554432` 表示默认头部 32 MiB 已读到。
 - `tail status=206` 表示文件尾部 Range 预读成功。
 - `tail bytes=4194304` 表示默认尾部 4 MiB 已读到。
+- `resume status=206` 表示恢复进度附近 Range 预读成功。
+- `resume position_seconds=...` 表示这次按 Emby 记录的播放进度预热到哪一秒附近。
 - `seconds=...` 是本次预热耗时。
 
 如果只有 `schedule item=...`，没有 `prewarm item=...`，等几秒再看；冷盘或大文件可能需要更久。
@@ -160,6 +163,7 @@ ls -lh /root/docker-compose/emby/config/logs/embyserver.txt
 - 每部电影每个 Token 4 分钟内只预热一次。
 - 预读文件头部 32 MiB。
 - 预读文件尾部 4 MiB。
+- 如果影片有上次播放进度，且进度大于 30 秒，额外预读恢复点附近 64 MiB。
 - 最多 2 个后台预热线程。
 
 可以通过 systemd 环境变量覆盖：
@@ -167,6 +171,8 @@ ls -lh /root/docker-compose/emby/config/logs/embyserver.txt
 ```ini
 Environment=EMBY_PREWARM_HEAD_BYTES=33554432
 Environment=EMBY_PREWARM_TAIL_BYTES=4194304
+Environment=EMBY_PREWARM_RESUME_BYTES=67108864
+Environment=EMBY_PREWARM_RESUME_MIN_SECONDS=30
 Environment=EMBY_PREWARM_COOLDOWN_SECONDS=240
 Environment=EMBY_PREWARM_MAX_WORKERS=2
 ```

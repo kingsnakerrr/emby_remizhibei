@@ -77,7 +77,12 @@ RCLONE_MOUNT_HELP = {
     "checkers": "并行检查数量，影响扫描目录速度。",
 }
 DOCKER_CONTAINERS = {"emby": "Emby", "cd2": "CloudDrive2", "symedia": "Symedia", "autofilm": "AutoFilm"}
-PREWARM_DEFAULTS = {"EMBY_PREWARM_HEAD_BYTES": 33554432, "EMBY_PREWARM_TAIL_BYTES": 4194304, "EMBY_PREWARM_MAX_WORKERS": 2}
+PREWARM_DEFAULTS = {
+    "EMBY_PREWARM_HEAD_BYTES": 33554432,
+    "EMBY_PREWARM_TAIL_BYTES": 4194304,
+    "EMBY_PREWARM_RESUME_BYTES": 67108864,
+    "EMBY_PREWARM_MAX_WORKERS": 2,
+}
 FIXER_DEFAULTS = {"image_interval_minutes": 30, "title_interval_minutes": 15, "image_enabled": True, "title_enabled": True, "image_roots": None, "title_roots": None}
 CONFIG_EDITORS = {
     "embystream_env": {"label": "EmbyStream 私有变量", "path": Path("/root/docker-compose/embystream/.env.private"), "restart": "unit", "target": "embystream.service"},
@@ -637,7 +642,7 @@ def dashboard():
   </section>
   <section class="card wide"><h2>自定义服务和定时器</h2><table><thead><tr><th>功能</th><th>状态</th><th>开机</th><th>操作</th></tr></thead><tbody>
   {% for name, meta, st in units %}<tr><td><strong>{{ meta.label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.active in ['active','activating'] else 'off' if st.exists else 'unknown' }}">{{ st.active }}</span></td><td>{{ st.enabled }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('unit_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button>{% if meta.run_unit %}<button name="action" value="run" class="warn">运行一次</button>{% endif %}<button name="action" value="log">日志</button></form>{% endif %}</td></tr>
-  {% if name == 'emby-play-prewarm.service' %}<tr><td colspan="4"><div class="subcard"><h3>播放预热参数</h3><p class="muted">当前：头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }}，尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }}，并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</p><form class="compact-form" method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label><p><button type="submit">保存并重启预热服务</button></p></form></div></td></tr>{% endif %}
+  {% if name == 'emby-play-prewarm.service' %}<tr><td colspan="4"><div class="subcard"><h3>播放预热参数</h3><p class="muted">当前：头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }}，尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }}，恢复进度附近 {{ mb(prewarm.EMBY_PREWARM_RESUME_BYTES) }}，并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</p><form class="compact-form" method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>恢复点 MB<br><input name="resume_mb" type="number" min="0" max="512" value="{{ prewarm.EMBY_PREWARM_RESUME_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label><p><button type="submit">保存并重启预热服务</button></p></form></div></td></tr>{% endif %}
   {% if name == 'embystream.service' %}<tr><td colspan="4"><details class="subcard"><summary><strong>EmbyStream 使用方法和编辑配置</strong></summary><ul class="help-list muted"><li>客户端连接 EmbyStream 前端入口，走备用 Google Drive API 播放链路；原 Emby 入口仍然保留。</li><li>核心配置是 `.env.private` 的 Emby API Key、Google OAuth、团队盘 ID，以及 `config.toml` 的端口和路径匹配。</li><li>保存配置会自动备份原文件并重启 `embystream.service`。</li></ul><div class="subgrid">{% for key in ['embystream_env','embystream_toml'] %}{% set cfg = configs[key] %}<form method="post" action="{{ url_for('save_config') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ key }}"><h3>{{ cfg.label }}</h3><p class="muted">{{ cfg.path }}{% if not cfg.exists %} / 当前不存在，保存会新建{% endif %}</p><textarea class="editor" name="content" spellcheck="false">{{ cfg.content }}</textarea><p><button type="submit">保存并重启 EmbyStream</button></p></form>{% endfor %}</div></details></td></tr>{% endif %}
   {% endfor %}
   </tbody></table></section>
@@ -962,9 +967,10 @@ def save_prewarm():
         require_csrf()
         head = max(1, min(512, int(request.form.get("head_mb", "32")))) * 1048576
         tail = max(0, min(128, int(request.form.get("tail_mb", "4")))) * 1048576
+        resume = max(0, min(512, int(request.form.get("resume_mb", "64")))) * 1048576
         workers = max(1, min(8, int(request.form.get("workers", "2"))))
         PREWARM_DROPIN.parent.mkdir(parents=True, exist_ok=True)
-        PREWARM_DROPIN.write_text("[Service]\n" f"Environment=EMBY_PREWARM_HEAD_BYTES={head}\n" f"Environment=EMBY_PREWARM_TAIL_BYTES={tail}\n" f"Environment=EMBY_PREWARM_MAX_WORKERS={workers}\n", encoding="utf-8")
+        PREWARM_DROPIN.write_text("[Service]\n" f"Environment=EMBY_PREWARM_HEAD_BYTES={head}\n" f"Environment=EMBY_PREWARM_TAIL_BYTES={tail}\n" f"Environment=EMBY_PREWARM_RESUME_BYTES={resume}\n" f"Environment=EMBY_PREWARM_MAX_WORKERS={workers}\n", encoding="utf-8")
         run(["systemctl", "daemon-reload"])
         result = run(["systemctl", "restart", "emby-play-prewarm.service"], timeout=120)
         if result.returncode != 0:

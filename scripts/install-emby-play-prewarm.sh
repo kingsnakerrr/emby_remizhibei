@@ -54,6 +54,8 @@ CONFIG_TOKEN_FILE = "/root/docker-compose/embystream-test/config/config.toml"
 DEFAULT_USER_ID = "3b5504d86b09414eb10c12765bea1e5d"
 HEAD_BYTES = int(os.environ.get("EMBY_PREWARM_HEAD_BYTES", str(32 * 1024 * 1024)))
 TAIL_BYTES = int(os.environ.get("EMBY_PREWARM_TAIL_BYTES", str(4 * 1024 * 1024)))
+RESUME_BYTES = int(os.environ.get("EMBY_PREWARM_RESUME_BYTES", str(64 * 1024 * 1024)))
+RESUME_MIN_SECONDS = int(os.environ.get("EMBY_PREWARM_RESUME_MIN_SECONDS", "30"))
 COOLDOWN_SECONDS = int(os.environ.get("EMBY_PREWARM_COOLDOWN_SECONDS", "240"))
 MAX_WORKERS = int(os.environ.get("EMBY_PREWARM_MAX_WORKERS", "2"))
 
@@ -158,6 +160,19 @@ def playback_info(item_id: str, token: str, user_id: str) -> tuple[str, str]:
     return container, stream_url
 
 
+def resume_position(item_id: str, token: str, user_id: str) -> tuple[int, int]:
+    query = urllib.parse.urlencode({"api_key": token})
+    data = get_json(f"{EMBY_BASE}/emby/Users/{user_id}/Items/{item_id}?{query}")
+    runtime_ticks = int(data.get("RunTimeTicks") or 0)
+    user_data = data.get("UserData") or {}
+    position_ticks = int(user_data.get("PlaybackPositionTicks") or 0)
+    if position_ticks < RESUME_MIN_SECONDS * 10_000_000:
+        position_ticks = 0
+    if runtime_ticks <= 0 or position_ticks <= 0 or position_ticks >= runtime_ticks:
+        return 0, runtime_ticks
+    return position_ticks, runtime_ticks
+
+
 def range_read(url: str, start: int, end: int) -> dict:
     req = urllib.request.Request(url)
     req.add_header("Range", f"bytes={start}-{end}")
@@ -183,16 +198,28 @@ def prewarm(item_id: str, token: str, user_id: str) -> None:
         container, stream_url = playback_info(item_id, token, user_id)
         head = range_read(stream_url, 0, HEAD_BYTES - 1)
         tail = None
+        resume = None
         total = head.get("total")
         if total:
-            tail_start = max(0, int(total) - TAIL_BYTES)
-            tail = range_read(stream_url, tail_start, int(total) - 1)
+            total_int = int(total)
+            if TAIL_BYTES > 0:
+                tail_start = max(0, total_int - TAIL_BYTES)
+                tail = range_read(stream_url, tail_start, total_int - 1)
+            if RESUME_BYTES > 0:
+                position_ticks, runtime_ticks = resume_position(item_id, token, user_id)
+                if position_ticks and runtime_ticks:
+                    center = max(0, min(total_int - 1, total_int * position_ticks // runtime_ticks))
+                    resume_start = max(0, center - RESUME_BYTES // 2)
+                    resume_end = min(total_int - 1, resume_start + RESUME_BYTES - 1)
+                    resume = range_read(stream_url, resume_start, resume_end)
+                    resume["position_seconds"] = round(position_ticks / 10_000_000)
         log.info(
-            "prewarm item=%s container=%s head=%s tail=%s seconds=%.3f",
+            "prewarm item=%s container=%s head=%s tail=%s resume=%s seconds=%.3f",
             item_id,
             container,
             head,
             tail,
+            resume,
             time.perf_counter() - started,
         )
     except Exception as exc:

@@ -56,7 +56,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | Docker/Compose | Docker 官方 apt 仓库 | 安装 Engine、Buildx、Compose v2 |
 | CloudDrive2 | `cloudnas/clouddrive2` | 固定当前验证过的镜像摘要 |
 | Emby | `amilys/embyserver` | 与当前神医环境兼容的第三方定制镜像，不是 Emby 官方镜像 |
-| Emby 播放预热器 | 本仓库 `scripts/install-emby-play-prewarm.sh` | 默认安装为 systemd 服务，播放时预读 CD2 媒体头尾 Range |
+| Emby 播放预热器 | 本仓库 `scripts/install-emby-play-prewarm.sh` | 默认安装为 systemd 服务，播放时预读媒体头尾和恢复进度附近 Range |
 | Emby STRM 图片补齐器 | 本仓库 `scripts/install-emby-strm-image-fixer.sh` | 默认安装为 systemd timer，补齐多版本 STRM 缺失的本地图片名 |
 | Emby STRM 中文标题监控 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 默认安装为 systemd timer，备份数据库后修正残留英文标题 |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
@@ -188,7 +188,7 @@ Google、CD2、Emby 的登录密码。
 
 一键安装会默认安装并启动 `emby-play-prewarm.service`。它可以先于 CD2 授权和 Emby 媒体库配置安装；没有播放日志时只会等待，不会影响正式播放。
 
-它的作用是监听 Emby 的真实播放请求：客户端点击播放并触发 `PlaybackInfo?IsPlayback=true` 后，后台提前读取该影片的头部 32 MiB 和尾部 4 MiB，让 rclone/CD2/团队盘冷片源先热起来。直连 `8096`、HTTPS `443`、Nginx 反代、BWG/BWGG 中转都能触发，只要最终请求进入同一台 Emby。
+它的作用是监听 Emby 的真实播放请求：客户端点击播放并触发 `PlaybackInfo?IsPlayback=true` 后，后台提前读取该影片的头部 32 MiB、尾部 4 MiB，以及上次恢复进度附近 64 MiB，让 rclone/CD2/团队盘冷片源先热起来。直连 `8096`、HTTPS `443`、Nginx 反代、BWG/BWGG 中转都能触发，只要最终请求进入同一台 Emby。
 
 检查服务是否运行：
 
@@ -218,10 +218,10 @@ journalctl -u emby-play-prewarm.service -f
 
 ```text
 schedule item=564916 user=...
-prewarm item=564916 container=mkv head={'status': 206, 'bytes': 33554432, ...} tail={'status': 206, 'bytes': 4194304, ...}
+prewarm item=564916 container=mkv head={'status': 206, 'bytes': 33554432, ...} tail={'status': 206, 'bytes': 4194304, ...} resume={'status': 206, 'bytes': 67108864, ...}
 ```
 
-其中 `head status=206` 和 `tail status=206` 表示头尾 Range 都读成功。完整说明见
+其中 `head status=206`、`tail status=206` 和 `resume status=206` 表示头部、尾部、恢复进度附近 Range 都读成功。完整说明见
 [Emby 播放预热器](docs/emby-play-prewarm.md)。
 
 手动重装或卸载：
