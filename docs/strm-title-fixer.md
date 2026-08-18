@@ -26,6 +26,40 @@ Resident Evil: Welcome to Raccoon City
 
 它不会修改 `OriginalTitle`，所以英文/原始标题仍会保留在数据库里。
 
+默认安装后会创建 systemd 定时器：
+
+```text
+emby-fix-strm-titles.timer
+emby-fix-strm-titles.service
+```
+
+定时器每 15 分钟预检一次。只有发现新刮削出的英文标题时才会短暂停止 Emby
+并修复；没有发现问题时不会重启 Emby。
+
+## 安装自动监控
+
+```bash
+sudo ./post-auth.sh strm-title-fixer
+```
+
+也可以直接执行：
+
+```bash
+sudo ./scripts/fix-emby-strm-chinese-titles.sh install
+```
+
+检查是否运行：
+
+```bash
+systemctl is-active emby-fix-strm-titles.timer
+```
+
+查看最近修复日志：
+
+```bash
+journalctl -u emby-fix-strm-titles.service -n 100 --no-pager
+```
+
 ## 预览
 
 ```bash
@@ -37,19 +71,20 @@ sudo ./scripts/fix-emby-strm-chinese-titles.sh dry-run
 ## 执行修复
 
 ```bash
-sudo ./scripts/fix-emby-strm-chinese-titles.sh
-```
-
-或显式执行：
-
-```bash
 sudo ./scripts/fix-emby-strm-chinese-titles.sh apply
 ```
 
-执行前会停止 Emby 几秒钟，避免直接写运行中的 SQLite 数据库。备份文件会保存到：
+只有发现需要修正的标题时，执行过程才会停止 Emby 几秒钟，避免直接写运行中的
+SQLite 数据库。备份文件会保存到：
 
 ```text
 /root/metadata-fix-backups/
+```
+
+卸载自动监控：
+
+```bash
+sudo ./scripts/fix-emby-strm-chinese-titles.sh uninstall
 ```
 
 ## 什么时候用
