@@ -30,6 +30,7 @@ cat >"${TOOL}" <<'PY'
 from __future__ import annotations
 
 import os
+import json
 import re
 import shutil
 import sqlite3
@@ -39,21 +40,42 @@ from pathlib import Path
 
 DB = Path("/root/docker-compose/emby/config/data/library.db")
 BACKUP_DIR = Path("/root/metadata-fix-backups")
+CONFIG = Path("/root/docker-compose/emby-tools/strm-fixer-roots.json")
+DEFAULT_ROOTS = [
+    Path("/home/symedia_gd/movies"),
+    Path("/home/symedia_rclone_zero/movies"),
+]
 CJK = re.compile(r"[\u4e00-\u9fff]")
-FOLDER_RE = re.compile(
-    r"/home/(?:symedia_rclone_zero|symedia_gd)/movies/[^/]+/"
-    r"([^/]+?) \(\d{4}\) \{tmdb-\d+\}/"
-)
+FOLDER_RE = re.compile(r"(.+?) \(\d{4}\) \{tmdb-\d+\}$")
 TITLE_RE = re.compile(r"(<title>)(.*?)(</title>)", re.S | re.I)
 SORT_RE = re.compile(r"(<sorttitle>)(.*?)(</sorttitle>)", re.S | re.I)
 
 
+def configured_roots() -> list[Path]:
+    try:
+        data = json.loads(CONFIG.read_text("utf-8"))
+        roots = [Path(value) for value in data.get("title_roots", []) if isinstance(value, str)]
+        roots = [root for root in roots if str(root).startswith("/home/")]
+        return roots or DEFAULT_ROOTS
+    except (OSError, json.JSONDecodeError):
+        return DEFAULT_ROOTS
+
+
 def title_from_path(path: str) -> str | None:
-    match = FOLDER_RE.search(path or "")
-    if not match:
+    if not path:
         return None
-    title = match.group(1).strip()
-    return title if CJK.search(title) else None
+    media_path = Path(path)
+    for root in configured_roots():
+        try:
+            rel = media_path.relative_to(root)
+        except ValueError:
+            continue
+        for part in rel.parts[:-1]:
+            match = FOLDER_RE.match(part)
+            if match:
+                title = match.group(1).strip()
+                return title if CJK.search(title) else None
+    return None
 
 
 def fix_nfo(path: str, title: str, dry_run: bool) -> bool:
@@ -82,8 +104,7 @@ def fix_nfo(path: str, title: str, dry_run: bool) -> bool:
 def find_changes(cur: sqlite3.Cursor, dry_run: bool) -> tuple[list[tuple[int, str, str, str]], int]:
     cur.execute(
         "select Id, Name, SortName, OriginalTitle, Path from MediaItems "
-        "where Path like '/home/symedia_rclone_zero/movies/%' "
-        "or Path like '/home/symedia_gd/movies/%'"
+        "where Path like '/home/%'"
     )
     changes: list[tuple[int, str, str, str]] = []
     nfo_changes = 0

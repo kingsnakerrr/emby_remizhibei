@@ -46,11 +46,13 @@ cat >"${SCRIPT}" <<'PY'
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import shutil
 import sys
 
 
-ROOTS = [
+CONFIG = Path("/root/docker-compose/emby-tools/strm-fixer-roots.json")
+DEFAULT_ROOTS = [
     # Keep this focused on movie STRM libraries. Wider scans can be expensive
     # and may copy artwork in unrelated folders.
     Path("/home/symedia_gd/movies"),
@@ -58,6 +60,16 @@ ROOTS = [
 ]
 IMAGE_KINDS = ["poster.jpg", "fanart.jpg", "clearlogo.png"]
 VIDEO_SUFFIXES = {".strm"}
+
+
+def configured_roots() -> list[Path]:
+    try:
+        data = json.loads(CONFIG.read_text("utf-8"))
+        roots = [Path(value) for value in data.get("image_roots", []) if isinstance(value, str)]
+        roots = [root for root in roots if str(root).startswith("/home/")]
+        return roots or DEFAULT_ROOTS
+    except (OSError, json.JSONDecodeError):
+        return DEFAULT_ROOTS
 
 
 def safe_copy(src: Path | None, dst: Path) -> bool:
@@ -114,7 +126,7 @@ def fix_folder(folder: Path) -> list[tuple[Path, Path]]:
 
 def main() -> int:
     total = 0
-    for root in ROOTS:
+    for root in configured_roots():
         if not root.exists():
             continue
         for folder in root.rglob("*"):
