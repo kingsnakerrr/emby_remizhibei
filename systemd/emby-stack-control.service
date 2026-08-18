@@ -1,0 +1,19 @@
+[Unit]
+Description=Emby stack helper web control panel
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root/docker-compose/stack-control
+ExecStart=/usr/bin/python3 /root/docker-compose/stack-control/app.py --host 127.0.0.1 --port 6011
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
