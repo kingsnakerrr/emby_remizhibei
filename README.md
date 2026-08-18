@@ -7,7 +7,7 @@
 - Emby 扫描入库并直连播放；
 - Emby 播放预热器自动预读冷片源头尾，缓解第一次起播慢；
 - Emby STRM 图片补齐器自动补齐多版本 STRM 缺失的本地封面；
-- Emby STRM 中文标题修复器按中文文件夹名修正残留英文标题；
+- Emby STRM 中文标题监控按中文文件夹名自动修正刮削后残留的英文标题；
 - EmbyStream 作为最后按需安装的可选备用线路，通过 Google Drive API 读取；
 - Rclone 网页控制台把另一团队盘中的 STRM/NFO/图片单向增量同步到本地；
 - 神医助手在用户自行安装和授权后应用已验证的播放相关设置。
@@ -58,7 +58,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | Emby | `amilys/embyserver` | 与当前神医环境兼容的第三方定制镜像，不是 Emby 官方镜像 |
 | Emby 播放预热器 | 本仓库 `scripts/install-emby-play-prewarm.sh` | 默认安装为 systemd 服务，播放时预读 CD2 媒体头尾 Range |
 | Emby STRM 图片补齐器 | 本仓库 `scripts/install-emby-strm-image-fixer.sh` | 默认安装为 systemd timer，补齐多版本 STRM 缺失的本地图片名 |
-| Emby STRM 中文标题修复器 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 手动运行，备份数据库后修正残留英文标题 |
+| Emby STRM 中文标题监控 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 默认安装为 systemd timer，备份数据库后修正残留英文标题 |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
 | EmbyStream | 上游 v0.0.43 + 本仓库刷新调度补丁 | GitHub Actions 可复现构建，固定版本并校验 SHA512 |
 | Rclone 同步控制台 | Debian/Ubuntu 的 `rclone`、`python3-flask` | 本仓库网页服务，端口 6096 |
@@ -100,6 +100,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 - 用户在向导最后选择后才安装 EmbyStream v0.0.43-p1，并校验本仓库发布包 SHA512。p1 修复 OAuth 失败时刷新调度器忙循环导致的 CPU 和日志暴涨。
 - 在神医助手已安装后，一键应用播放相关设置和凌晨任务。
 - 默认安装 STRM 图片补齐器，每 30 分钟补齐多版本 STRM 的 `*-poster/fanart/clearlogo`。
+- 默认安装 STRM 中文标题监控，每 15 分钟纠正刮削后残留的英文展示标题。
 - 安装 Rclone 和 6096 网页控制台，支持上传并验证 `rclone.conf`、浏览远程目录、手动和定时单向同步。
 - 检查挂载传播、路径、服务和敏感文件。
 - 可选生成不包含媒体数据的 `age` 加密配置备份。
@@ -274,11 +275,17 @@ sudo ./post-auth.sh strm-image-fixer
 sudo ./scripts/install-emby-strm-image-fixer.sh uninstall
 ```
 
-## Emby STRM 中文标题修复器
+## Emby STRM 中文标题监控
 
 如果文件夹已经是中文名，但 Emby 海报墙仍显示 `Rebel Ridge`、
 `Spider-Man: No Way Home` 这类英文标题，通常是 NFO 或 Emby 数据库里保留了旧标题。
 普通刷新元数据有时不会覆盖它。
+
+安装自动监控：
+
+```bash
+sudo ./post-auth.sh strm-title-fixer
+```
 
 先预览：
 
@@ -286,15 +293,15 @@ sudo ./scripts/install-emby-strm-image-fixer.sh uninstall
 sudo ./scripts/fix-emby-strm-chinese-titles.sh dry-run
 ```
 
-确认后修复：
+手动修一次：
 
 ```bash
-sudo ./post-auth.sh strm-title-fixer
+sudo ./post-auth.sh strm-title-fixer apply
 ```
 
-脚本会短暂停止 Emby，备份 `library.db`，再按 STRM 所在电影文件夹的中文名修正
-`Name` 和 `SortName`。完整说明见
-[Emby STRM 中文标题修复器](docs/strm-title-fixer.md)。
+监控每 15 分钟预检一次；只有发现英文标题时才会短暂停止 Emby，备份 `library.db`，
+再按 STRM 所在电影文件夹的中文名修正 `Name` 和 `SortName`。完整说明见
+[Emby STRM 中文标题监控](docs/strm-title-fixer.md)。
 
 ## 神医助手导入
 
