@@ -24,6 +24,13 @@ FIXER_ROOTS = Path("/root/docker-compose/emby-tools/strm-fixer-roots.json")
 EMBY_DB = Path("/root/docker-compose/emby/config/data/library.db")
 PREWARM_DROPIN = Path("/etc/systemd/system/emby-play-prewarm.service.d/override.conf")
 DOMAIN = "https://hdz.180o.222321.xyz"
+URLS = {
+    "emby": f"{DOMAIN}/",
+    "control": f"{DOMAIN}:8443/",
+    "sync": f"{DOMAIN}:9443/",
+    "cd2": f"{DOMAIN}:10443/",
+    "symedia": f"{DOMAIN}:11443/",
+}
 
 SYSTEMD_UNITS = {
     "emby-play-prewarm.service": {"label": "Emby 播放预热", "log": "emby-play-prewarm.service", "actions": ("start", "stop", "restart")},
@@ -73,7 +80,7 @@ def initial_settings() -> dict:
     user = os.environ.get("STACK_CONTROL_INITIAL_USER", "admin").strip() or "admin"
     password = os.environ.get("STACK_CONTROL_INITIAL_PASSWORD", "") or secrets.token_urlsafe(18)
     APP_ROOT.mkdir(parents=True, exist_ok=True)
-    CREDS_FILE.write_text(f"URL: {DOMAIN}/control/\nUsername: {user}\nPassword: {password}\n", encoding="utf-8")
+    CREDS_FILE.write_text(f"URL: {URLS['control']}\nUsername: {user}\nPassword: {password}\n", encoding="utf-8")
     os.chmod(CREDS_FILE, 0o600)
     return {"secret_key": secrets.token_hex(32), "username": user, "password_hash": generate_password_hash(password)}
 
@@ -144,15 +151,15 @@ def healthz():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        username = request.form.get("username", "")
-        password = request.form.get("password", "")
+        username = request.form.get("stack_control_user", "")
+        password = request.form.get("stack_control_pass", "")
         if secrets.compare_digest(username, settings.get("username", "")) and check_password_hash(settings.get("password_hash", ""), password):
             session.clear()
             session["user"] = username
             csrf_token()
             return redirect(url_for("dashboard"))
         flash("账号或密码错误。")
-    return page("登录", """<div class="card" style="max-width:420px;margin:80px auto"><h1>登录控制台</h1><form method="post"><p><input name="username" placeholder="账号" autocomplete="username" required style="width:100%"></p><p><input name="password" type="password" placeholder="密码" autocomplete="current-password" required style="width:100%"></p><button type="submit">登录</button></form></div>""")
+    return page("登录", """<div class="card" style="max-width:420px;margin:80px auto"><h1>登录控制台</h1><form method="post" autocomplete="off"><p><input name="stack_control_user" placeholder="账号" autocomplete="section-stack-control username" required style="width:100%"></p><p><input name="stack_control_pass" type="password" placeholder="密码" autocomplete="section-stack-control current-password" required style="width:100%"></p><button type="submit">登录</button></form></div>""")
 
 
 @app.route("/logout")
@@ -244,11 +251,11 @@ def web_apps() -> list[dict[str, str]]:
     rclone_settings = read_json(Path("/root/docker-compose/rclone-sync/settings.json"), {})
     rclone_creds = parse_kv_file(Path("/root/docker-compose/rclone-sync/credentials.txt"))
     return [
-        {"name": "Emby", "url": f"{DOMAIN}/", "user": "Emby 内账号", "password": "不在控制台保存"},
-        {"name": "CloudDrive2", "url": f"{DOMAIN}/cd2/", "user": "CD2 内账号", "password": "服务端哈希保存，不能反查"},
-        {"name": "Symedia", "url": f"{DOMAIN}/symedia/", "user": "Symedia 内账号", "password": "不在控制台保存"},
-        {"name": "Rclone 同步控制台", "url": f"{DOMAIN}/sync/", "user": rclone_settings.get("username", rclone_creds.get("username", "admin")), "password": rclone_creds.get("password", "已有哈希，未保存明文")},
-        {"name": "Stack Control", "url": f"{DOMAIN}/control/", "user": stack.get("username", settings.get("username", "admin")), "password": stack.get("password", "见 /root/docker-compose/stack-control/credentials.txt")},
+        {"name": "Emby", "url": URLS["emby"], "user": "Emby 内账号", "password": "不在控制台保存"},
+        {"name": "CloudDrive2", "url": URLS["cd2"], "user": "CD2 内账号", "password": "服务端哈希保存，不能反查"},
+        {"name": "Symedia", "url": URLS["symedia"], "user": "Symedia 内账号", "password": "不在控制台保存"},
+        {"name": "Rclone 同步控制台", "url": URLS["sync"], "user": rclone_settings.get("username", rclone_creds.get("username", "admin")), "password": rclone_creds.get("password", "已有哈希，未保存明文")},
+        {"name": "Stack Control", "url": URLS["control"], "user": stack.get("username", settings.get("username", "admin")), "password": stack.get("password", "见 /root/docker-compose/stack-control/credentials.txt")},
     ]
 
 
@@ -398,7 +405,7 @@ def account():
             settings["username"] = username
             settings["password_hash"] = generate_password_hash(new)
             write_json(SETTINGS_FILE, settings)
-            CREDS_FILE.write_text(f"URL: {DOMAIN}/control/\nUsername: {username}\nPassword: {new}\n", encoding="utf-8")
+            CREDS_FILE.write_text(f"URL: {URLS['control']}\nUsername: {username}\nPassword: {new}\n", encoding="utf-8")
             os.chmod(CREDS_FILE, 0o600)
             session.clear()
             flash("账号密码已修改，请重新登录。")
