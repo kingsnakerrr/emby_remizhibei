@@ -7,6 +7,7 @@
 - Emby 扫描入库并直连播放；
 - Emby 播放预热器自动预读冷片源头尾，缓解第一次起播慢；
 - Emby STRM 图片补齐器自动补齐多版本 STRM 缺失的本地封面；
+- Emby STRM 中文标题修复器按中文文件夹名修正残留英文标题；
 - EmbyStream 作为最后按需安装的可选备用线路，通过 Google Drive API 读取；
 - Rclone 网页控制台把另一团队盘中的 STRM/NFO/图片单向增量同步到本地；
 - 神医助手在用户自行安装和授权后应用已验证的播放相关设置。
@@ -57,6 +58,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | Emby | `amilys/embyserver` | 与当前神医环境兼容的第三方定制镜像，不是 Emby 官方镜像 |
 | Emby 播放预热器 | 本仓库 `scripts/install-emby-play-prewarm.sh` | 默认安装为 systemd 服务，播放时预读 CD2 媒体头尾 Range |
 | Emby STRM 图片补齐器 | 本仓库 `scripts/install-emby-strm-image-fixer.sh` | 默认安装为 systemd timer，补齐多版本 STRM 缺失的本地图片名 |
+| Emby STRM 中文标题修复器 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 手动运行，备份数据库后修正残留英文标题 |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
 | EmbyStream | 上游 v0.0.43 + 本仓库刷新调度补丁 | GitHub Actions 可复现构建，固定版本并校验 SHA512 |
 | Rclone 同步控制台 | Debian/Ubuntu 的 `rclone`、`python3-flask` | 本仓库网页服务，端口 6096 |
@@ -271,6 +273,28 @@ journalctl -u emby-fix-strm-images.service -n 100 --no-pager
 sudo ./post-auth.sh strm-image-fixer
 sudo ./scripts/install-emby-strm-image-fixer.sh uninstall
 ```
+
+## Emby STRM 中文标题修复器
+
+如果文件夹已经是中文名，但 Emby 海报墙仍显示 `Rebel Ridge`、
+`Spider-Man: No Way Home` 这类英文标题，通常是 NFO 或 Emby 数据库里保留了旧标题。
+普通刷新元数据有时不会覆盖它。
+
+先预览：
+
+```bash
+sudo ./scripts/fix-emby-strm-chinese-titles.sh dry-run
+```
+
+确认后修复：
+
+```bash
+sudo ./post-auth.sh strm-title-fixer
+```
+
+脚本会短暂停止 Emby，备份 `library.db`，再按 STRM 所在电影文件夹的中文名修正
+`Name` 和 `SortName`。完整说明见
+[Emby STRM 中文标题修复器](docs/strm-title-fixer.md)。
 
 ## 神医助手导入
 
