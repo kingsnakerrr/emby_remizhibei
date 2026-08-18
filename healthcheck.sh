@@ -41,6 +41,11 @@ fi
 if systemctl list-unit-files emby-fix-strm-titles.timer >/dev/null 2>&1; then
   check "Emby STRM 中文标题监控" systemctl is-active --quiet emby-fix-strm-titles.timer
 fi
+if systemctl list-unit-files emby-stack-control.service >/dev/null 2>&1; then
+  check "Emby Stack Control 控制台" systemctl is-active --quiet emby-stack-control.service
+  check "Emby Stack Control 6011" \
+    curl -fsS --max-time 5 http://127.0.0.1:6011/healthz
+fi
 if systemctl list-unit-files rclone-sync-web.service >/dev/null 2>&1; then
   check "Rclone 同步控制台服务" systemctl is-active --quiet rclone-sync-web.service
   check "Rclone 同步控制台 6096" \
