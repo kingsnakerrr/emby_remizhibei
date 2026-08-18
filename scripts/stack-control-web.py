@@ -119,6 +119,7 @@ button,.btn{border:0;border-radius:6px;padding:7px 10px;margin:2px;background:va
 input{padding:8px;background:#0d1117;color:var(--text);border:1px solid var(--line);border-radius:6px}input[type=number]{width:92px}.row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.muted{color:var(--muted)}.flash{background:#1f2a44;border:1px solid #315a9d;border-radius:8px;padding:10px;margin-bottom:12px}
 pre{white-space:pre-wrap;background:#010409;border:1px solid var(--line);border-radius:8px;padding:12px;max-height:52vh;overflow:auto;font:12px/1.55 Consolas,monospace}.secret{font-family:Consolas,monospace;word-break:break-all}.checks{columns:2;column-gap:24px}.checks label{display:block;margin:6px 0;break-inside:avoid}
 .split{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr);gap:14px}.taskbox{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}.taskbox:first-child{border-top:0;margin-top:0;padding-top:0}.inline{display:inline}.field{width:100%}.tiny{width:82px!important}
+.subgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px}.subcard{background:#0f141b;border:1px solid var(--line);border-radius:8px;padding:14px}.subcard .checks{columns:1}.statusline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 12px}
 @media(max-width:760px){.row{grid-template-columns:1fr}.checks{columns:1}table{font-size:12px}th,td{padding:8px 5px}}
 @media(max-width:980px){.split{grid-template-columns:1fr}}
 </style></head><body>
@@ -363,15 +364,33 @@ def dashboard():
   <section class="card wide"><h2>Docker 容器</h2><table><thead><tr><th>容器</th><th>状态</th><th>重启次数</th><th>操作</th></tr></thead><tbody>
   {% for name, label, st in containers %}<tr><td><strong>{{ label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.running else 'off' if st.exists else 'unknown' }}">{{ st.status }}</span></td><td>{{ st.restarts }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('container_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button><button name="action" value="log">日志</button></form>{% endif %}</td></tr>{% endfor %}
   </tbody></table></section>
-  <section class="card wide"><h2>STRM 监控设置</h2><form method="post" action="{{ url_for('save_fixers') }}"><input type="hidden" name="csrf" value="{{ csrf }}">
-    <p class="muted">默认：图片补齐 30 分钟一次，中文标题 15 分钟一次。保存后会立刻改 systemd timer。</p>
-    <p>图片补齐：<span class="pill {{ 'on' if image_timer.active == 'active' else 'off' }}">{{ image_timer.active }}</span>　中文标题：<span class="pill {{ 'on' if title_timer.active == 'active' else 'off' }}">{{ title_timer.active }}</span></p>
-    <div class="row"><label>图片补齐间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label><label>中文标题间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label><span></span></div>
-    <p><label><input type="checkbox" name="image_enabled" {% if fixers.image_enabled %}checked{% endif %}> 启用 STRM 图片补齐监控</label>　<label><input type="checkbox" name="title_enabled" {% if fixers.title_enabled %}checked{% endif %}> 启用 STRM 中文标题监控</label></p>
-    <h3>图片补齐要刷新哪些媒体库</h3><div class="checks">{% for lib in libs %}<label><input type="checkbox" name="image_roots" value="{{ lib }}" {% if lib in fixers.image_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
-    <h3>中文标题要刷新哪些媒体库</h3><div class="checks">{% for lib in libs %}<label><input type="checkbox" name="title_roots" value="{{ lib }}" {% if lib in fixers.title_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
-    {% if not libs %}<p class="muted">还没从 Emby 数据库发现 /home 下的 STRM 媒体库。</p>{% endif %}<p><button type="submit">保存 STRM 监控设置</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image" class="warn" type="submit">图片补齐运行一次</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title" class="warn" type="submit">中文标题运行一次</button></p>
-  </form></section>
+  <section class="card wide"><h2>STRM 监控设置</h2>
+    <p class="muted">新增媒体库会从 Emby 数据库自动出现；全部不勾选时，对应监控不会扫描任何库。</p>
+    <form method="post" action="{{ url_for('save_fixers') }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="subgrid">
+        <div class="subcard">
+          <h3>图片补齐监控</h3>
+          <div class="statusline"><span>运行状态</span><span class="pill {{ 'on' if image_timer.active == 'active' else 'off' }}">{{ image_timer.active }}</span><span class="muted">默认 30 分钟一次</span></div>
+          <p><label><input type="checkbox" name="image_enabled" {% if fixers.image_enabled %}checked{% endif %}> 启用监控</label></p>
+          <p><label>运行间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label></p>
+          <h3>刷新媒体库</h3>
+          <div class="checks">{% for lib in libs %}<label><input type="checkbox" name="image_roots" value="{{ lib }}" {% if lib in fixers.image_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
+          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image" class="warn" type="submit">运行一次</button></p>
+        </div>
+        <div class="subcard">
+          <h3>中文标题监控</h3>
+          <div class="statusline"><span>运行状态</span><span class="pill {{ 'on' if title_timer.active == 'active' else 'off' }}">{{ title_timer.active }}</span><span class="muted">默认 15 分钟一次</span></div>
+          <p><label><input type="checkbox" name="title_enabled" {% if fixers.title_enabled %}checked{% endif %}> 启用监控</label></p>
+          <p><label>运行间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label></p>
+          <h3>刷新媒体库</h3>
+          <div class="checks">{% for lib in libs %}<label><input type="checkbox" name="title_roots" value="{{ lib }}" {% if lib in fixers.title_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
+          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title" class="warn" type="submit">运行一次</button></p>
+        </div>
+      </div>
+      {% if not libs %}<p class="muted">还没从 Emby 数据库发现 /home 下的 STRM 媒体库。</p>{% endif %}
+      <p><button type="submit">保存 STRM 监控设置</button></p>
+    </form>
+  </section>
   <section class="card"><h2>播放预热参数</h2><p class="muted">当前：头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }}，尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }}，并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</p><form method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><div class="row"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label></div><p><button type="submit">保存并重启预热服务</button></p></form></section>
 </div>
 """, units=units, mount_units=mount_units, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_timer=unit_status("emby-fix-strm-images.timer"), title_timer=unit_status("emby-fix-strm-titles.timer"), prewarm=read_prewarm_env(), mb=mb, csrf=csrf_token())
