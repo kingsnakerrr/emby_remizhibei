@@ -22,6 +22,9 @@ case "${ACTION}" in
   play-prewarm)
     "${REPO_DIR}/scripts/install-emby-play-prewarm.sh"
     ;;
+  strm-image-fixer)
+    "${REPO_DIR}/scripts/install-emby-strm-image-fixer.sh"
+    ;;
   symedia)
     "${REPO_DIR}/scripts/audit-symedia.sh"
     ;;
@@ -29,7 +32,7 @@ case "${ACTION}" in
     "${REPO_DIR}/scripts/install-home-media-backup.sh" "${2:-}"
     ;;
   *)
-    echo "Usage: $0 {cd2|strm-assistant|embystream|play-prewarm|symedia|home-media-backup}"
+    echo "Usage: $0 {cd2|strm-assistant|embystream|play-prewarm|strm-image-fixer|symedia|home-media-backup}"
     exit 2
     ;;
 esac
