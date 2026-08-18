@@ -657,21 +657,21 @@ def dashboard():
       <div class="subgrid">
         <div class="subcard">
           <h3>图片和元素补齐监控</h3>
-          <div class="statusline"><span>运行状态</span><span class="pill {{ 'on' if image_timer.active == 'active' else 'off' }}">{{ image_timer.active }}</span><span class="muted">启动监控=按间隔自动检查缺封面/背景图/NFO/简介的项目，不是实时监听。</span></div>
-          <p><label><input type="checkbox" name="image_enabled" {% if fixers.image_enabled %}checked{% endif %}> 启动自动监控</label></p>
+          <div class="statusline"><span>运行状态</span><span class="pill {{ 'on' if image_timer.active == 'active' else 'off' }}">{{ image_timer.active }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
+          <p><label><input type="checkbox" name="image_enabled" {% if fixers.image_enabled %}checked{% endif %}> 启动定时轮询</label></p>
           <p><label>运行间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
           <div class="checks">{% for lib in libs %}<label><input type="checkbox" name="image_roots" value="{{ lib }}" {% if lib in fixers.image_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
-          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image" class="warn" type="submit">只检查缺失/未扫过</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image-full" class="danger" type="submit" onclick="return confirm('全局刷新会让勾选媒体库全部重新请求 Emby 刮削，确定执行？')">全局媒体库扫描</button></p>
+          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image" class="warn" type="submit">只检查缺失/未扫过</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局刷新会让勾选媒体库全部重新请求 Emby 刮削，确定执行？')">全局媒体库扫描</button></p>
         </div>
         <div class="subcard">
           <h3>中文标题、简介等修正监控</h3>
-          <div class="statusline"><span>运行状态</span><span class="pill {{ 'on' if title_timer.active == 'active' else 'off' }}">{{ title_timer.active }}</span><span class="muted">启动监控=按间隔自动检查英文标题/英文简介/未扫过项目，不是实时监听。</span></div>
-          <p><label><input type="checkbox" name="title_enabled" {% if fixers.title_enabled %}checked{% endif %}> 启动自动监控</label></p>
+          <div class="statusline"><span>运行状态</span><span class="pill {{ 'on' if title_timer.active == 'active' else 'off' }}">{{ title_timer.active }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
+          <p><label><input type="checkbox" name="title_enabled" {% if fixers.title_enabled %}checked{% endif %}> 启动定时轮询</label></p>
           <p><label>运行间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
           <div class="checks">{% for lib in libs %}<label><input type="checkbox" name="title_roots" value="{{ lib }}" {% if lib in fixers.title_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
-          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title" class="warn" type="submit">只检查缺失/未扫过</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title-full" class="danger" type="submit" onclick="return confirm('全局刷新会让勾选媒体库全部重新请求中文元数据，确定执行？')">全局媒体库扫描</button></p>
+          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title" class="warn" type="submit">只检查缺失/未扫过</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局刷新会让勾选媒体库全部重新请求中文元数据，确定执行？')">全局媒体库扫描</button></p>
         </div>
       </div>
       {% if not libs %}<p class="muted">还没从 Emby 数据库发现 /home 下的 STRM 媒体库。</p>{% endif %}

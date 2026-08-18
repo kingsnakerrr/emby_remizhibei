@@ -35,15 +35,15 @@ emby-fix-strm-titles.timer
 emby-fix-strm-titles.service
 ```
 
-定时器每 15 分钟预检一次。“启动监控”指启用这个 systemd timer，让它按间隔自动
-检查英文标题、英文简介和未扫过项目；它不是实时文件监听。只有发现需要直接写
-数据库的英文标题时才会短暂停止 Emby；只有简介需要刷新时，会直接请求 Emby 刷新
-对应项目。
+定时器每 15 分钟预检一次。“启动定时轮询”指启用这个 systemd timer，让它按间隔
+自动检查勾选媒体库里的英文标题、英文简介和未扫过项目；它不是实时文件监听。只有
+发现需要直接写数据库的英文标题时才会短暂停止 Emby；只有简介需要刷新时，会直接
+请求 Emby 刷新对应项目。
 
-控制台里的“只检查缺失/未扫过”会立即跑一次轻量检查；“全局媒体库扫描”会让勾选
+控制台里的“只检查缺失/未扫过”会立即跑一次轻量检查；“全局媒体库扫描”只会让勾选
 媒体库内所有项目重新请求 Emby 中文元数据刷新，耗时和 API 请求都更多。
 
-## 安装自动监控
+## 安装定时轮询
 
 ```bash
 sudo ./post-auth.sh strm-title-fixer
@@ -89,7 +89,7 @@ SQLite 数据库。备份文件会保存到：
 /root/metadata-fix-backups/
 ```
 
-卸载自动监控：
+卸载定时轮询：
 
 ```bash
 sudo ./scripts/fix-emby-strm-chinese-titles.sh uninstall
