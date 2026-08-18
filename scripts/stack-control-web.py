@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -45,6 +46,34 @@ RCLONE_SYNC_DEFAULT_TASKS = [
     {"id": "symedia_gd", "name": "symedia_gd", "remote": "snakegd_kingsnakerrr", "remote_path": "media/symedia_gd", "local_path": "/home/symedia_gd", "interval_minutes": 10, "enabled": False, "mode": "copy", "metadata_only": False, "confirm_mirror": False, "transfers": 16, "checkers": 16},
     {"id": "symedia_jav", "name": "symedia_jav", "remote": "snakegd_kingsnakerrr", "remote_path": "media/symedia_jav", "local_path": "/home/symedia_jav", "interval_minutes": 10, "enabled": False, "mode": "copy", "metadata_only": False, "confirm_mirror": False, "transfers": 16, "checkers": 16},
 ]
+RCLONE_MOUNT_DEFAULTS = {
+    "dir-cache-time": "72h",
+    "poll-interval": "15s",
+    "vfs-cache-mode": "full",
+    "vfs-cache-max-size": "600G",
+    "vfs-cache-max-age": "72h",
+    "vfs-cache-poll-interval": "1m",
+    "vfs-read-chunk-size": "64M",
+    "vfs-read-chunk-size-limit": "2G",
+    "buffer-size": "128M",
+    "drive-chunk-size": "256M",
+    "transfers": "8",
+    "checkers": "16",
+}
+RCLONE_MOUNT_HELP = {
+    "dir-cache-time": "目录列表缓存时间，越长越少请求网盘目录。",
+    "poll-interval": "轮询远端变化间隔，短一点目录变化发现更快。",
+    "vfs-cache-mode": "full 会缓存读过的数据，适合媒体播放拖动。",
+    "vfs-cache-max-size": "单个挂载允许占用的最大本地缓存空间。",
+    "vfs-cache-max-age": "缓存文件多久没用后过期清理。",
+    "vfs-cache-poll-interval": "检查缓存是否需要清理的间隔。",
+    "vfs-read-chunk-size": "开始读取的分块大小，影响起播和顺序读取。",
+    "vfs-read-chunk-size-limit": "分块自动增大上限，影响大文件连续播放。",
+    "buffer-size": "每个打开文件的内存缓冲。",
+    "drive-chunk-size": "Google Drive 传输块大小。",
+    "transfers": "并行传输数量，播放挂载一般不用太高。",
+    "checkers": "并行检查数量，影响扫描目录速度。",
+}
 DOCKER_CONTAINERS = {"emby": "Emby", "cd2": "CloudDrive2", "symedia": "Symedia", "autofilm": "AutoFilm"}
 PREWARM_DEFAULTS = {"EMBY_PREWARM_HEAD_BYTES": 33554432, "EMBY_PREWARM_TAIL_BYTES": 4194304, "EMBY_PREWARM_MAX_WORKERS": 2}
 FIXER_DEFAULTS = {"image_interval_minutes": 30, "title_interval_minutes": 15, "image_enabled": True, "title_enabled": True, "image_roots": None, "title_roots": None}
@@ -210,6 +239,105 @@ def rclone_mount_units() -> list[tuple[str, dict, dict]]:
     return units
 
 
+def rclone_mount_config(unit: str) -> dict:
+    text = run(["systemctl", "cat", unit]).stdout
+    lines = text.splitlines()
+    command = ""
+    for index, line in enumerate(lines):
+        if not line.startswith("ExecStart="):
+            continue
+        parts = [line.removeprefix("ExecStart=")]
+        cursor = index + 1
+        while parts[-1].rstrip().endswith("\\") and cursor < len(lines):
+            parts[-1] = parts[-1].rstrip()[:-1]
+            parts.append(lines[cursor].strip())
+            cursor += 1
+        command = " ".join(parts)
+        break
+    remote = ""
+    mount_path = ""
+    options = RCLONE_MOUNT_DEFAULTS.copy()
+    try:
+        args = shlex.split(command)
+    except ValueError:
+        args = []
+    if len(args) >= 4 and args[1] == "mount":
+        remote = args[2].rstrip(":")
+        mount_path = args[3]
+    index = 4
+    while index < len(args):
+        token = args[index]
+        if not token.startswith("--"):
+            index += 1
+            continue
+        key_value = token[2:]
+        if "=" in key_value:
+            key, value = key_value.split("=", 1)
+        elif index + 1 < len(args) and not args[index + 1].startswith("--"):
+            key, value = key_value, args[index + 1]
+            index += 1
+        else:
+            key, value = key_value, "on"
+        if key in options:
+            options[key] = value
+        index += 1
+    return {"remote": remote, "mount_path": mount_path, "options": options}
+
+
+def write_rclone_mount_service(unit: str, remote: str, mount_path: str, options: dict[str, str]) -> None:
+    if not (unit.startswith("rclone-") and unit.endswith(".service") and unit != "rclone-sync-web.service"):
+        raise ValueError("不是允许管理的 rclone 挂载服务。")
+    if remote not in rclone_remotes():
+        raise ValueError("rclone.conf 里没有这个 remote。")
+    path = Path(mount_path.strip())
+    if not path.is_absolute() or not str(path).startswith("/home/"):
+        raise ValueError("挂载目录必须是 /home 下的绝对路径。")
+    path.mkdir(parents=True, exist_ok=True)
+    name = unit.removeprefix("rclone-").removesuffix(".service")
+    merged = RCLONE_MOUNT_DEFAULTS.copy()
+    for key, value in options.items():
+        if key in merged and str(value).strip():
+            merged[key] = str(value).strip()
+    rc_port = "5573" if name == "zero" else "5574" if name == "h2" else "5575"
+    lines = [
+        "[Unit]",
+        f"Description=Rclone mount Google Drive {remote} root",
+        "Wants=network-online.target",
+        "After=network-online.target",
+        f"AssertPathIsDirectory={path}",
+        "",
+        "[Service]",
+        "Type=simple",
+        "User=root",
+        "Group=root",
+        f"ExecStart=/usr/bin/rclone mount {shlex.quote(remote + ':')} {shlex.quote(str(path))} \\",
+        "  --config=/root/.config/rclone/rclone.conf \\",
+        "  --allow-other \\",
+        "  --read-only \\",
+    ]
+    for key in RCLONE_MOUNT_DEFAULTS:
+        lines.append(f"  --{key}={merged[key]} \\")
+    lines += [
+        "  --umask=002 \\",
+        f"  --cache-dir=/var/cache/rclone/{name} \\",
+        "  --log-level=INFO \\",
+        f"  --log-file=/var/log/rclone/{name}.log \\",
+        "  --rc \\",
+        f"  --rc-addr=127.0.0.1:{rc_port} \\",
+        "  --rc-no-auth",
+        f"ExecStop=/bin/fusermount3 -uz {path}",
+        "Restart=on-failure",
+        "RestartSec=10",
+        "TimeoutStopSec=30",
+        "KillMode=process",
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+        "",
+    ]
+    Path(f"/etc/systemd/system/{unit}").write_text("\n".join(lines), encoding="utf-8")
+
+
 def rclone_remotes() -> list[str]:
     if not RCLONE_CONFIG.exists():
         return []
@@ -345,10 +473,23 @@ def dashboard():
   <section class="card wide"><h2>Web 入口和账号</h2><table><thead><tr><th>软件</th><th>地址</th><th>账号</th><th>密码</th></tr></thead><tbody>
   {% for item in web_apps %}<tr><td><strong>{{ item.name }}</strong></td><td><a class="btn" href="{{ item.url }}" target="_blank">打开网页</a><br><span class="muted">{{ item.url }}</span></td><td class="secret">{{ item.user }}</td><td class="secret">{{ item.password }}</td></tr>{% endfor %}
   </tbody></table></section>
-  <section class="card wide"><h2>Rclone 本地挂载开关</h2><table><thead><tr><th>挂载</th><th>状态</th><th>开机</th><th>操作</th></tr></thead><tbody>
-  {% for name, meta, st in mount_units %}<tr><td><strong>{{ meta.label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.active in ['active','activating'] else 'off' if st.exists else 'unknown' }}">{{ st.active }}</span></td><td>{{ st.enabled }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('unit_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}"><input type="hidden" name="dynamic_rclone" value="1"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button><button name="action" value="log">日志</button></form>{% endif %}</td></tr>{% endfor %}
-  {% if not mount_units %}<tr><td colspan="4" class="muted">还没发现 rclone-*.service 挂载。</td></tr>{% endif %}
-  </tbody></table></section>
+  <section class="card wide"><h2>Rclone 本地挂载</h2>
+  {% for name, meta, st in mount_units %}{% set cfg = mount_configs[name] %}
+    <details class="taskbox"><summary><strong>{{ cfg.remote or meta.label }}</strong> -> <code>{{ cfg.mount_path or '未识别目录' }}</code> <span class="pill {{ 'on' if st.active in ['active','activating'] else 'off' if st.exists else 'unknown' }}">{{ st.active }}</span> <span class="muted">{{ name }} / {{ st.enabled }}</span></summary>
+      <form method="post" action="{{ url_for('save_mount') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}">
+        <div class="row"><label>Rclone config 名称<br><select class="field" name="remote">{% for remote in remotes %}<option value="{{ remote }}" {% if remote == cfg.remote %}selected{% endif %}>{{ remote }}</option>{% endfor %}{% if cfg.remote and cfg.remote not in remotes %}<option value="{{ cfg.remote }}" selected>{{ cfg.remote }}</option>{% endif %}</select></label><label>挂载到本地目录<br><input class="field" name="mount_path" value="{{ cfg.mount_path }}"></label><span></span></div>
+        <p><button type="button" class="warn" onclick="for (const [k,v] of Object.entries({{ mount_defaults_json|safe }})) { const el = this.form.elements['opt_'+k]; if (el) el.value = v; }">填入本地挂载默认值</button></p>
+        <div class="subgrid">
+        {% for key, value in cfg.options.items() %}
+          <label>{{ key }}<br><input class="field" name="opt_{{ key }}" value="{{ value }}"><span class="muted">{{ mount_help[key] }}</span></label>
+        {% endfor %}
+        </div>
+        <p><button type="submit">保存并重启挂载</button><button formaction="{{ url_for('unit_action') }}" name="action" value="start" class="okbtn" type="submit">启动</button><button formaction="{{ url_for('unit_action') }}" name="action" value="stop" class="danger" type="submit">停止</button><button formaction="{{ url_for('unit_action') }}" name="action" value="restart" type="submit">重启</button><button formaction="{{ url_for('unit_action') }}" name="action" value="log" type="submit">日志</button><input type="hidden" name="dynamic_rclone" value="1"></p>
+      </form>
+    </details>
+  {% endfor %}
+  {% if not mount_units %}<p class="muted">还没发现 rclone-*.service 挂载。</p>{% endif %}
+  </section>
   <section class="card wide"><h2>Rclone 同步任务</h2><div class="split"><div>
   {% for task in tasks %}<div class="taskbox"><h3>{{ task.name }}</h3><form method="post" action="{{ url_for('save_sync_task') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="task_id" value="{{ task.id }}">
     <div class="row"><label>任务名<br><input class="field" name="name" value="{{ task.name }}" required></label><label>Remote<br><select class="field" name="remote">{% for remote in remotes %}<option value="{{ remote }}" {% if remote == task.remote %}selected{% endif %}>{{ remote }}</option>{% endfor %}{% if task.remote and task.remote not in remotes %}<option value="{{ task.remote }}" selected>{{ task.remote }}</option>{% endif %}</select></label><label>间隔分钟<br><input class="tiny" type="number" name="interval_minutes" min="1" max="1440" value="{{ task.interval_minutes }}"></label></div>
@@ -393,7 +534,7 @@ def dashboard():
   </section>
   <section class="card"><h2>播放预热参数</h2><p class="muted">当前：头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }}，尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }}，并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</p><form method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><div class="row"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label></div><p><button type="submit">保存并重启预热服务</button></p></form></section>
 </div>
-""", units=units, mount_units=mount_units, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_timer=unit_status("emby-fix-strm-images.timer"), title_timer=unit_status("emby-fix-strm-titles.timer"), prewarm=read_prewarm_env(), mb=mb, csrf=csrf_token())
+""", units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_timer=unit_status("emby-fix-strm-images.timer"), title_timer=unit_status("emby-fix-strm-titles.timer"), prewarm=read_prewarm_env(), mb=mb, csrf=csrf_token())
 
 
 @app.route("/unit", methods=["POST"])
@@ -419,6 +560,26 @@ def unit_action():
             raise ValueError(result.stderr.strip() or result.stdout.strip() or "操作失败。")
         flash(f"{meta['label']} 已执行：{action}")
     except (ValueError, subprocess.TimeoutExpired) as error:
+        flash(str(error))
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/mount/save", methods=["POST"])
+def save_mount():
+    try:
+        require_csrf()
+        unit = request.form.get("unit", "")
+        remote = request.form.get("remote", "").strip()
+        mount_path = request.form.get("mount_path", "").strip()
+        options = {key: request.form.get(f"opt_{key}", "").strip() for key in RCLONE_MOUNT_DEFAULTS}
+        write_rclone_mount_service(unit, remote, mount_path, options)
+        run(["systemctl", "daemon-reload"])
+        run(["systemctl", "enable", unit])
+        result = run(["systemctl", "restart", unit], timeout=120)
+        if result.returncode != 0:
+            raise ValueError(result.stderr.strip() or result.stdout.strip() or "重启挂载失败。")
+        flash("Rclone 挂载参数已保存并重启。")
+    except (ValueError, OSError, subprocess.TimeoutExpired) as error:
         flash(str(error))
     return redirect(url_for("dashboard"))
 
