@@ -26,7 +26,7 @@ case "${ACTION}" in
     "${REPO_DIR}/scripts/install-emby-strm-image-fixer.sh"
     ;;
   strm-title-fixer)
-    "${REPO_DIR}/scripts/fix-emby-strm-chinese-titles.sh" "${2:-apply}"
+    "${REPO_DIR}/scripts/fix-emby-strm-chinese-titles.sh" "${2:-install}"
     ;;
   symedia)
     "${REPO_DIR}/scripts/audit-symedia.sh"
