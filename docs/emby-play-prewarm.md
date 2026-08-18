@@ -108,21 +108,21 @@ Token 检查：
 
 - 启动日志里出现 `token_seeded=True`，表示预热器已经从最近的 Emby 播放日志里读取到可用 token。
 - 只有 `schedule item=...` 只能说明捕获到了播放动作，不代表已经预读成功。
-- 必须看到 `prewarm item=... head={'status': 206, 'bytes': 8388608, ...}`，才表示真实读取了视频头部。
+- 必须看到 `prewarm item=... head={'status': 206, 'bytes': 33554432, ...}`，才表示真实读取了视频头部。
 
 用 Emby、小幻、RodelPlayer 或其他客户端点击一部电影播放。看到类似下面两行，说明已经捕获到播放请求并开始预热：
 
 ```text
 schedule item=564916 user=...
-prewarm item=564916 container=mkv head={'status': 206, 'bytes': 8388608, ...} tail={'status': 206, 'bytes': 1048576, ...}
+prewarm item=564916 container=mkv head={'status': 206, 'bytes': 33554432, ...} tail={'status': 206, 'bytes': 4194304, ...}
 ```
 
 重点看 `prewarm item=...` 这一行：
 
 - `head status=206` 表示文件头部 Range 预读成功。
-- `head bytes=8388608` 表示默认头部 8 MiB 已读到。
+- `head bytes=33554432` 表示默认头部 32 MiB 已读到。
 - `tail status=206` 表示文件尾部 Range 预读成功。
-- `tail bytes=1048576` 表示默认尾部 1 MiB 已读到。
+- `tail bytes=4194304` 表示默认尾部 4 MiB 已读到。
 - `seconds=...` 是本次预热耗时。
 
 如果只有 `schedule item=...`，没有 `prewarm item=...`，等几秒再看；冷盘或大文件可能需要更久。
@@ -158,15 +158,15 @@ ls -lh /root/docker-compose/emby/config/logs/embyserver.txt
 
 - 只处理 `IsPlayback=true` 的真实播放请求。
 - 每部电影每个 Token 4 分钟内只预热一次。
-- 预读文件头部 8 MiB。
-- 预读文件尾部 1 MiB。
+- 预读文件头部 32 MiB。
+- 预读文件尾部 4 MiB。
 - 最多 2 个后台预热线程。
 
 可以通过 systemd 环境变量覆盖：
 
 ```ini
-Environment=EMBY_PREWARM_HEAD_BYTES=8388608
-Environment=EMBY_PREWARM_TAIL_BYTES=1048576
+Environment=EMBY_PREWARM_HEAD_BYTES=33554432
+Environment=EMBY_PREWARM_TAIL_BYTES=4194304
 Environment=EMBY_PREWARM_COOLDOWN_SECONDS=240
 Environment=EMBY_PREWARM_MAX_WORKERS=2
 ```
