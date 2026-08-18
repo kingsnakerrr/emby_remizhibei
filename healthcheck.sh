@@ -35,6 +35,9 @@ check "Rclone" rclone version
 if systemctl list-unit-files emby-play-prewarm.service >/dev/null 2>&1; then
   check "Emby 播放预热器" systemctl is-active --quiet emby-play-prewarm.service
 fi
+if systemctl list-unit-files emby-fix-strm-images.timer >/dev/null 2>&1; then
+  check "Emby STRM 图片补齐器" systemctl is-active --quiet emby-fix-strm-images.timer
+fi
 if systemctl list-unit-files rclone-sync-web.service >/dev/null 2>&1; then
   check "Rclone 同步控制台服务" systemctl is-active --quiet rclone-sync-web.service
   check "Rclone 同步控制台 6096" \
