@@ -65,9 +65,11 @@ VIDEO_SUFFIXES = {".strm"}
 def configured_roots() -> list[Path]:
     try:
         data = json.loads(CONFIG.read_text("utf-8"))
+        if "image_roots" not in data:
+            return DEFAULT_ROOTS
         roots = [Path(value) for value in data.get("image_roots", []) if isinstance(value, str)]
         roots = [root for root in roots if str(root).startswith("/home/")]
-        return roots or DEFAULT_ROOTS
+        return roots
     except (OSError, json.JSONDecodeError):
         return DEFAULT_ROOTS
 

@@ -54,9 +54,11 @@ SORT_RE = re.compile(r"(<sorttitle>)(.*?)(</sorttitle>)", re.S | re.I)
 def configured_roots() -> list[Path]:
     try:
         data = json.loads(CONFIG.read_text("utf-8"))
+        if "title_roots" not in data:
+            return DEFAULT_ROOTS
         roots = [Path(value) for value in data.get("title_roots", []) if isinstance(value, str)]
         roots = [root for root in roots if str(root).startswith("/home/")]
-        return roots or DEFAULT_ROOTS
+        return roots
     except (OSError, json.JSONDecodeError):
         return DEFAULT_ROOTS
 

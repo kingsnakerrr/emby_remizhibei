@@ -47,7 +47,7 @@ RCLONE_SYNC_DEFAULT_TASKS = [
 ]
 DOCKER_CONTAINERS = {"emby": "Emby", "cd2": "CloudDrive2", "symedia": "Symedia", "autofilm": "AutoFilm"}
 PREWARM_DEFAULTS = {"EMBY_PREWARM_HEAD_BYTES": 33554432, "EMBY_PREWARM_TAIL_BYTES": 4194304, "EMBY_PREWARM_MAX_WORKERS": 2}
-FIXER_DEFAULTS = {"image_interval_minutes": 30, "title_interval_minutes": 15, "image_roots": [], "title_roots": []}
+FIXER_DEFAULTS = {"image_interval_minutes": 30, "title_interval_minutes": 15, "image_enabled": True, "title_enabled": True, "image_roots": None, "title_roots": None}
 
 
 def run(command: list[str], timeout: int = 30) -> subprocess.CompletedProcess[str]:
@@ -304,8 +304,12 @@ def fixer_settings(libs: list[str]) -> dict:
     data = read_json(FIXER_SETTINGS, FIXER_DEFAULTS)
     data["image_interval_minutes"] = timer_interval("emby-fix-strm-images.timer", int(data.get("image_interval_minutes") or 30))
     data["title_interval_minutes"] = timer_interval("emby-fix-strm-titles.timer", int(data.get("title_interval_minutes") or 15))
-    data["image_roots"] = [p for p in data.get("image_roots", []) if p in libs] or [p for p in libs if "movies" in p]
-    data["title_roots"] = [p for p in data.get("title_roots", []) if p in libs] or [p for p in libs if "movies" in p]
+    data["image_enabled"] = bool(data.get("image_enabled", True))
+    data["title_enabled"] = bool(data.get("title_enabled", True))
+    image_roots = data.get("image_roots")
+    title_roots = data.get("title_roots")
+    data["image_roots"] = [p for p in image_roots if p in libs] if isinstance(image_roots, list) else [p for p in libs if "movies" in p]
+    data["title_roots"] = [p for p in title_roots if p in libs] if isinstance(title_roots, list) else [p for p in libs if "movies" in p]
     return data
 
 
@@ -361,14 +365,16 @@ def dashboard():
   </tbody></table></section>
   <section class="card wide"><h2>STRM 监控设置</h2><form method="post" action="{{ url_for('save_fixers') }}"><input type="hidden" name="csrf" value="{{ csrf }}">
     <p class="muted">默认：图片补齐 30 分钟一次，中文标题 15 分钟一次。保存后会立刻改 systemd timer。</p>
+    <p>图片补齐：<span class="pill {{ 'on' if image_timer.active == 'active' else 'off' }}">{{ image_timer.active }}</span>　中文标题：<span class="pill {{ 'on' if title_timer.active == 'active' else 'off' }}">{{ title_timer.active }}</span></p>
     <div class="row"><label>图片补齐间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label><label>中文标题间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label><span></span></div>
+    <p><label><input type="checkbox" name="image_enabled" {% if fixers.image_enabled %}checked{% endif %}> 启用 STRM 图片补齐监控</label>　<label><input type="checkbox" name="title_enabled" {% if fixers.title_enabled %}checked{% endif %}> 启用 STRM 中文标题监控</label></p>
     <h3>图片补齐要刷新哪些媒体库</h3><div class="checks">{% for lib in libs %}<label><input type="checkbox" name="image_roots" value="{{ lib }}" {% if lib in fixers.image_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
     <h3>中文标题要刷新哪些媒体库</h3><div class="checks">{% for lib in libs %}<label><input type="checkbox" name="title_roots" value="{{ lib }}" {% if lib in fixers.title_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
-    {% if not libs %}<p class="muted">还没从 Emby 数据库发现 /home 下的 STRM 媒体库。</p>{% endif %}<p><button type="submit">保存 STRM 监控设置</button></p>
+    {% if not libs %}<p class="muted">还没从 Emby 数据库发现 /home 下的 STRM 媒体库。</p>{% endif %}<p><button type="submit">保存 STRM 监控设置</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image" class="warn" type="submit">图片补齐运行一次</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title" class="warn" type="submit">中文标题运行一次</button></p>
   </form></section>
   <section class="card"><h2>播放预热参数</h2><p class="muted">当前：头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }}，尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }}，并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</p><form method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><div class="row"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label></div><p><button type="submit">保存并重启预热服务</button></p></form></section>
 </div>
-""", units=units, mount_units=mount_units, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, prewarm=read_prewarm_env(), mb=mb, csrf=csrf_token())
+""", units=units, mount_units=mount_units, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_timer=unit_status("emby-fix-strm-images.timer"), title_timer=unit_status("emby-fix-strm-titles.timer"), prewarm=read_prewarm_env(), mb=mb, csrf=csrf_token())
 
 
 @app.route("/unit", methods=["POST"])
@@ -533,19 +539,38 @@ def save_fixers():
         libs = set(discover_libraries())
         image_roots = [p for p in request.form.getlist("image_roots") if p in libs]
         title_roots = [p for p in request.form.getlist("title_roots") if p in libs]
+        image_enabled = request.form.get("image_enabled") == "on"
+        title_enabled = request.form.get("title_enabled") == "on"
         image_interval = max(1, min(1440, int(request.form.get("image_interval", "30"))))
         title_interval = max(1, min(1440, int(request.form.get("title_interval", "15"))))
-        data = {"image_interval_minutes": image_interval, "title_interval_minutes": title_interval, "image_roots": image_roots, "title_roots": title_roots}
+        data = {"image_interval_minutes": image_interval, "title_interval_minutes": title_interval, "image_enabled": image_enabled, "title_enabled": title_enabled, "image_roots": image_roots, "title_roots": title_roots}
         write_json(FIXER_SETTINGS, data)
         write_json(FIXER_ROOTS, {"image_roots": image_roots, "title_roots": title_roots})
         set_timer("emby-fix-strm-images.timer", "emby-fix-strm-images.service", "5min", image_interval)
         set_timer("emby-fix-strm-titles.timer", "emby-fix-strm-titles.service", "10min", title_interval)
         run(["systemctl", "daemon-reload"])
-        run(["systemctl", "enable", "--now", "emby-fix-strm-images.timer"])
-        run(["systemctl", "enable", "--now", "emby-fix-strm-titles.timer"])
-        run(["systemctl", "restart", "emby-fix-strm-images.timer"])
-        run(["systemctl", "restart", "emby-fix-strm-titles.timer"])
+        run(["systemctl", "enable", "emby-fix-strm-images.timer"])
+        run(["systemctl", "enable", "emby-fix-strm-titles.timer"])
+        run(["systemctl", "restart", "emby-fix-strm-images.timer"] if image_enabled else ["systemctl", "stop", "emby-fix-strm-images.timer"])
+        run(["systemctl", "restart", "emby-fix-strm-titles.timer"] if title_enabled else ["systemctl", "stop", "emby-fix-strm-titles.timer"])
         flash("STRM 监控设置已保存。")
+    except (ValueError, subprocess.TimeoutExpired) as error:
+        flash(str(error))
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/fixers/run", methods=["POST"])
+def run_fixer_once():
+    try:
+        require_csrf()
+        kind = request.form.get("kind", "")
+        unit = {"image": "emby-fix-strm-images.service", "title": "emby-fix-strm-titles.service"}.get(kind)
+        if not unit:
+            raise ValueError("未知 STRM 任务。")
+        result = run(["systemctl", "start", unit], timeout=120)
+        if result.returncode != 0:
+            raise ValueError(result.stderr.strip() or result.stdout.strip() or "运行失败。")
+        flash("已触发运行一次。")
     except (ValueError, subprocess.TimeoutExpired) as error:
         flash(str(error))
     return redirect(url_for("dashboard"))
