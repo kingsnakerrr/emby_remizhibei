@@ -52,8 +52,8 @@ LOG_PATH = "/root/docker-compose/emby/config/logs/embyserver.txt"
 EMBY_BASE = "http://127.0.0.1:8096"
 CONFIG_TOKEN_FILE = "/root/docker-compose/embystream-test/config/config.toml"
 DEFAULT_USER_ID = "3b5504d86b09414eb10c12765bea1e5d"
-HEAD_BYTES = int(os.environ.get("EMBY_PREWARM_HEAD_BYTES", str(8 * 1024 * 1024)))
-TAIL_BYTES = int(os.environ.get("EMBY_PREWARM_TAIL_BYTES", str(1024 * 1024)))
+HEAD_BYTES = int(os.environ.get("EMBY_PREWARM_HEAD_BYTES", str(32 * 1024 * 1024)))
+TAIL_BYTES = int(os.environ.get("EMBY_PREWARM_TAIL_BYTES", str(4 * 1024 * 1024)))
 COOLDOWN_SECONDS = int(os.environ.get("EMBY_PREWARM_COOLDOWN_SECONDS", "240"))
 MAX_WORKERS = int(os.environ.get("EMBY_PREWARM_MAX_WORKERS", "2"))
 
@@ -258,7 +258,7 @@ chmod 0755 "${SCRIPT}"
 
 cat >"${SERVICE}" <<UNIT
 [Unit]
-Description=Emby Playback CD2 Prewarmer
+Description=Emby Playback Prewarmer
 After=network-online.target docker.service
 Wants=network-online.target
 
