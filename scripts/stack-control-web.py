@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import re
@@ -78,10 +79,16 @@ RCLONE_MOUNT_HELP = {
 DOCKER_CONTAINERS = {"emby": "Emby", "cd2": "CloudDrive2", "symedia": "Symedia", "autofilm": "AutoFilm"}
 PREWARM_DEFAULTS = {"EMBY_PREWARM_HEAD_BYTES": 33554432, "EMBY_PREWARM_TAIL_BYTES": 4194304, "EMBY_PREWARM_MAX_WORKERS": 2}
 FIXER_DEFAULTS = {"image_interval_minutes": 30, "title_interval_minutes": 15, "image_enabled": True, "title_enabled": True, "image_roots": None, "title_roots": None}
+CONFIG_EDITORS = {
+    "embystream_env": {"label": "EmbyStream 私有变量", "path": Path("/root/docker-compose/embystream/.env.private"), "restart": "unit", "target": "embystream.service"},
+    "embystream_toml": {"label": "EmbyStream TOML 配置", "path": Path("/root/docker-compose/embystream/config/config.toml"), "restart": "unit", "target": "embystream.service"},
+    "autofilm_yaml": {"label": "AutoFilm 主配置", "path": Path("/root/docker-compose/autofilm/config/config.yaml"), "restart": "container", "target": "autofilm"},
+    "autofilm_compose": {"label": "AutoFilm Compose", "path": Path("/root/docker-compose/autofilm/compose.yaml"), "restart": "compose", "target": "/root/docker-compose/autofilm"},
+}
 
 
-def run(command: list[str], timeout: int = 30) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, text=True, capture_output=True, timeout=timeout, check=False)
+def run(command: list[str], timeout: int = 30, cwd: str | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, text=True, capture_output=True, timeout=timeout, check=False, cwd=cwd)
 
 
 def read_json(path: Path, default: dict) -> dict:
@@ -149,7 +156,7 @@ button,.btn{border:0;border-radius:6px;padding:7px 10px;margin:2px;background:va
 input{padding:8px;background:#0d1117;color:var(--text);border:1px solid var(--line);border-radius:6px}input[type=number]{width:92px}.row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.muted{color:var(--muted)}.flash{background:#1f2a44;border:1px solid #315a9d;border-radius:8px;padding:10px;margin-bottom:12px}
 pre{white-space:pre-wrap;background:#010409;border:1px solid var(--line);border-radius:8px;padding:12px;max-height:52vh;overflow:auto;font:12px/1.55 Consolas,monospace}.secret{font-family:Consolas,monospace;word-break:break-all}.checks{columns:2;column-gap:24px}.checks label{display:block;margin:6px 0;break-inside:avoid}
 .split{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr);gap:14px}.taskbox{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}.taskbox:first-child{border-top:0;margin-top:0;padding-top:0}.inline{display:inline}.field{width:100%}.tiny{width:82px!important}
-.subgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px}.subcard{background:#0f141b;border:1px solid var(--line);border-radius:8px;padding:14px}.subcard .checks{columns:1}.statusline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 12px}.compact-form{display:flex;align-items:end;gap:14px;flex-wrap:wrap}.compact-form label{min-width:92px}.compact-form p{margin:0}
+.subgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px}.subcard{background:#0f141b;border:1px solid var(--line);border-radius:8px;padding:14px}.subcard .checks{columns:1}.statusline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 12px}.compact-form{display:flex;align-items:end;gap:14px;flex-wrap:wrap}.compact-form label{min-width:92px}.compact-form p{margin:0}.editor{width:100%;min-height:260px;background:#010409;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px;font:12px/1.45 Consolas,monospace}.help-list{margin:8px 0 14px;padding-left:18px}.help-list li{margin:4px 0}
 @media(max-width:760px){.row{grid-template-columns:1fr}.checks{columns:1}table{font-size:12px}th,td{padding:8px 5px}}
 @media(max-width:980px){.split{grid-template-columns:1fr}}
 </style></head><body>
@@ -551,6 +558,32 @@ def web_apps() -> list[dict[str, str]]:
     ]
 
 
+def editable_config(key: str) -> dict:
+    item = CONFIG_EDITORS[key].copy()
+    path = item["path"]
+    try:
+        item["content"] = path.read_text(encoding="utf-8", errors="replace")
+        item["exists"] = True
+    except OSError:
+        item["content"] = ""
+        item["exists"] = False
+    return item
+
+
+def restart_after_config_save(item: dict) -> None:
+    mode = item["restart"]
+    if mode == "unit":
+        result = run(["systemctl", "restart", item["target"]], timeout=120)
+    elif mode == "container":
+        result = run(["docker", "restart", item["target"]], timeout=120)
+    elif mode == "compose":
+        result = run(["docker", "compose", "up", "-d"], timeout=180, cwd=str(item["target"]))
+    else:
+        raise ValueError("未知应用方式。")
+    if result.returncode != 0:
+        raise ValueError(result.stderr.strip() or result.stdout.strip() or "应用配置失败。")
+
+
 def mb(value: int) -> str:
     return f"{value // 1048576} MB"
 
@@ -605,10 +638,13 @@ def dashboard():
   <section class="card wide"><h2>自定义服务和定时器</h2><table><thead><tr><th>功能</th><th>状态</th><th>开机</th><th>操作</th></tr></thead><tbody>
   {% for name, meta, st in units %}<tr><td><strong>{{ meta.label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.active in ['active','activating'] else 'off' if st.exists else 'unknown' }}">{{ st.active }}</span></td><td>{{ st.enabled }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('unit_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button>{% if meta.run_unit %}<button name="action" value="run" class="warn">运行一次</button>{% endif %}<button name="action" value="log">日志</button></form>{% endif %}</td></tr>
   {% if name == 'emby-play-prewarm.service' %}<tr><td colspan="4"><div class="subcard"><h3>播放预热参数</h3><p class="muted">当前：头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }}，尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }}，并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</p><form class="compact-form" method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label><p><button type="submit">保存并重启预热服务</button></p></form></div></td></tr>{% endif %}
+  {% if name == 'embystream.service' %}<tr><td colspan="4"><details class="subcard"><summary><strong>EmbyStream 使用方法和编辑配置</strong></summary><ul class="help-list muted"><li>客户端连接 EmbyStream 前端入口，走备用 Google Drive API 播放链路；原 Emby 入口仍然保留。</li><li>核心配置是 `.env.private` 的 Emby API Key、Google OAuth、团队盘 ID，以及 `config.toml` 的端口和路径匹配。</li><li>保存配置会自动备份原文件并重启 `embystream.service`。</li></ul><div class="subgrid">{% for key in ['embystream_env','embystream_toml'] %}{% set cfg = configs[key] %}<form method="post" action="{{ url_for('save_config') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ key }}"><h3>{{ cfg.label }}</h3><p class="muted">{{ cfg.path }}{% if not cfg.exists %} / 当前不存在，保存会新建{% endif %}</p><textarea class="editor" name="content" spellcheck="false">{{ cfg.content }}</textarea><p><button type="submit">保存并重启 EmbyStream</button></p></form>{% endfor %}</div></details></td></tr>{% endif %}
   {% endfor %}
   </tbody></table></section>
   <section class="card wide"><h2>Docker 容器</h2><table><thead><tr><th>容器</th><th>状态</th><th>重启次数</th><th>操作</th></tr></thead><tbody>
-  {% for name, label, st in containers %}<tr><td><strong>{{ label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.running else 'off' if st.exists else 'unknown' }}">{{ st.status }}</span></td><td>{{ st.restarts }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('container_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button><button name="action" value="log">日志</button></form>{% endif %}</td></tr>{% endfor %}
+  {% for name, label, st in containers %}<tr><td><strong>{{ label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.running else 'off' if st.exists else 'unknown' }}">{{ st.status }}</span></td><td>{{ st.restarts }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('container_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button><button name="action" value="log">日志</button></form>{% endif %}</td></tr>
+  {% if name == 'autofilm' %}<tr><td colspan="4"><details class="subcard"><summary><strong>AutoFilm 使用方法和编辑配置</strong></summary><ul class="help-list muted"><li>AutoFilm 当前主要靠 `config.yaml` 里的 cron 定时任务运行，不是独立网页面板。</li><li>`config.yaml` 配 Alist/OpenList、媒体服务器、生成 STRM、追番和海报任务；`compose.yaml` 配容器挂载路径。</li><li>保存主配置会重启 AutoFilm；保存 compose 会执行 `docker compose up -d` 重建容器。</li></ul><div class="subgrid">{% for key in ['autofilm_yaml','autofilm_compose'] %}{% set cfg = configs[key] %}<form method="post" action="{{ url_for('save_config') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ key }}"><h3>{{ cfg.label }}</h3><p class="muted">{{ cfg.path }}</p><textarea class="editor" name="content" spellcheck="false">{{ cfg.content }}</textarea><p><button type="submit">保存并应用 AutoFilm</button></p></form>{% endfor %}</div></details></td></tr>{% endif %}
+  {% endfor %}
   </tbody></table></section>
   <section class="card wide"><h2>STRM 监控设置</h2>
     <p class="muted">新增媒体库会从 Emby 数据库自动出现；全部不勾选时，对应监控不会扫描任何库。</p>
@@ -638,7 +674,7 @@ def dashboard():
     </form>
   </section>
 </div>
-""", units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_timer=unit_status("emby-fix-strm-images.timer"), title_timer=unit_status("emby-fix-strm-titles.timer"), prewarm=read_prewarm_env(), mb=mb, csrf=csrf_token())
+""", units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_timer=unit_status("emby-fix-strm-images.timer"), title_timer=unit_status("emby-fix-strm-titles.timer"), prewarm=read_prewarm_env(), configs={key: editable_config(key) for key in CONFIG_EDITORS}, mb=mb, csrf=csrf_token())
 
 
 @app.route("/unit", methods=["POST"])
@@ -838,6 +874,33 @@ def container_action():
             raise ValueError(result.stderr.strip() or result.stdout.strip() or "操作失败。")
         flash(f"{DOCKER_CONTAINERS[name]} 已执行：{action}")
     except (ValueError, subprocess.TimeoutExpired) as error:
+        flash(str(error))
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/config/save", methods=["POST"])
+def save_config():
+    try:
+        require_csrf()
+        key = request.form.get("key", "")
+        if key not in CONFIG_EDITORS:
+            raise ValueError("未知配置文件。")
+        content = request.form.get("content", "")
+        if len(content.encode("utf-8")) > 1024 * 1024:
+            raise ValueError("配置文件超过 1MB，控制台不保存这么大的文件。")
+        item = CONFIG_EDITORS[key]
+        path = item["path"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup = path.with_name(f"{path.name}.bak-{stamp}")
+            backup.write_bytes(path.read_bytes())
+        path.write_text(content.replace("\r\n", "\n"), encoding="utf-8")
+        if "env" in key:
+            os.chmod(path, 0o600)
+        restart_after_config_save(item)
+        flash(f"{item['label']} 已保存并应用。")
+    except (ValueError, OSError, subprocess.TimeoutExpired) as error:
         flash(str(error))
     return redirect(url_for("dashboard"))
 
