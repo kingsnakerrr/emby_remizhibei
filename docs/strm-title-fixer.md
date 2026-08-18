@@ -1,4 +1,4 @@
-# Emby STRM 中文标题修复器
+# Emby STRM 中文标题、简介等修正监控
 
 有些影片的文件夹已经是中文名，例如：
 
@@ -14,7 +14,8 @@ Spider-Man: No Way Home
 Resident Evil: Welcome to Raccoon City
 ```
 
-这种情况下，普通“刷新元数据”不一定会覆盖旧标题，前端就会继续显示英文。
+这种情况下，普通“刷新元数据”不一定会覆盖旧标题，前端就会继续显示英文。简介
+仍是英文时，也通常需要重新按中文语言刷新元数据。
 
 本工具会按 STRM 所在电影文件夹提取中文片名，然后：
 
@@ -22,6 +23,7 @@ Resident Evil: Welcome to Raccoon City
 - 停止 Emby；
 - 备份 `/root/docker-compose/emby/config/data/library.db`；
 - 修正 Emby 数据库中对应 STRM 条目的 `Name` 和 `SortName`；
+- 对英文简介、缺失简介或未扫过的项目调用 Emby API 刷新中文元数据；
 - 启动 Emby。
 
 它不会修改 `OriginalTitle`，所以英文/原始标题仍会保留在数据库里。
@@ -33,8 +35,13 @@ emby-fix-strm-titles.timer
 emby-fix-strm-titles.service
 ```
 
-定时器每 15 分钟预检一次。只有发现新刮削出的英文标题时才会短暂停止 Emby
-并修复；没有发现问题时不会重启 Emby。
+定时器每 15 分钟预检一次。“启动监控”指启用这个 systemd timer，让它按间隔自动
+检查英文标题、英文简介和未扫过项目；它不是实时文件监听。只有发现需要直接写
+数据库的英文标题时才会短暂停止 Emby；只有简介需要刷新时，会直接请求 Emby 刷新
+对应项目。
+
+控制台里的“只检查缺失/未扫过”会立即跑一次轻量检查；“全局媒体库扫描”会让勾选
+媒体库内所有项目重新请求 Emby 中文元数据刷新，耗时和 API 请求都更多。
 
 ## 安装自动监控
 
@@ -66,7 +73,8 @@ journalctl -u emby-fix-strm-titles.service -n 100 --no-pager
 sudo ./scripts/fix-emby-strm-chinese-titles.sh dry-run
 ```
 
-看到 `WOULD_FIX` 表示会被修复，但不会改文件、不会停 Emby。
+看到 `WOULD_FIX` 表示标题会被修复；看到 `WOULD_REFRESH` 表示会请求 Emby 重新刮削
+中文简介或缺失元数据。预览不会改文件、不会停 Emby。
 
 ## 执行修复
 
@@ -90,6 +98,7 @@ sudo ./scripts/fix-emby-strm-chinese-titles.sh uninstall
 ## 什么时候用
 
 - 文件夹中文，但 Emby 海报墙标题显示英文；
+- 详情页简介仍然是英文；
 - NFO 已经被改成中文，Emby 刷新后仍不变；
 - 多版本 STRM 入库后部分版本显示英文标题。
 

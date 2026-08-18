@@ -6,8 +6,8 @@
 - Symedia 生成 STRM/NFO 等本地媒体元素；
 - Emby 扫描入库并直连播放；
 - Emby 播放预热器自动预读冷片源头尾，缓解第一次起播慢；
-- Emby STRM 图片补齐器自动补齐多版本 STRM 缺失的本地封面；
-- Emby STRM 中文标题监控按中文文件夹名自动修正刮削后残留的英文标题；
+- Emby STRM 图片和元素补齐监控自动补齐多版本 STRM 缺失封面，并触发缺失 NFO/背景图/简介的项目重新刮削；
+- Emby STRM 中文标题、简介等修正监控按中文文件夹名修正残留英文标题，并触发英文简介重新刮削；
 - EmbyStream 作为最后按需安装的可选备用线路，通过 Google Drive API 读取；
 - Rclone 网页控制台把另一团队盘中的 STRM/NFO/图片单向增量同步到本地；
 - 神医助手在用户自行安装和授权后应用已验证的播放相关设置。
@@ -57,8 +57,8 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | CloudDrive2 | `cloudnas/clouddrive2` | 固定当前验证过的镜像摘要 |
 | Emby | `amilys/embyserver` | 与当前神医环境兼容的第三方定制镜像，不是 Emby 官方镜像 |
 | Emby 播放预热器 | 本仓库 `scripts/install-emby-play-prewarm.sh` | 默认安装为 systemd 服务，播放时预读媒体头尾和恢复进度附近 Range |
-| Emby STRM 图片补齐器 | 本仓库 `scripts/install-emby-strm-image-fixer.sh` | 默认安装为 systemd timer，补齐多版本 STRM 缺失的本地图片名 |
-| Emby STRM 中文标题监控 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 默认安装为 systemd timer，备份数据库后修正残留英文标题 |
+| Emby STRM 图片和元素补齐监控 | 本仓库 `scripts/install-emby-strm-image-fixer.sh` | 默认安装为 systemd timer，补齐本地图片名并请求 Emby 刷新缺失元素 |
+| Emby STRM 中文标题、简介等修正监控 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 默认安装为 systemd timer，备份数据库后修正残留英文标题并刷新中文简介 |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
 | EmbyStream | 上游 v0.0.43 + 本仓库刷新调度补丁 | GitHub Actions 可复现构建，固定版本并校验 SHA512 |
 | Rclone 同步控制台 | Debian/Ubuntu 的 `rclone`、`python3-flask` | 本仓库网页服务，端口 6096 |
@@ -99,8 +99,8 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 - 固定 Symedia 为当前服务器已验证的镜像摘要，避免 `latest` 漂移。
 - 用户在向导最后选择后才安装 EmbyStream v0.0.43-p1，并校验本仓库发布包 SHA512。p1 修复 OAuth 失败时刷新调度器忙循环导致的 CPU 和日志暴涨。
 - 在神医助手已安装后，一键应用播放相关设置和凌晨任务。
-- 默认安装 STRM 图片补齐器，每 30 分钟补齐多版本 STRM 的 `*-poster/fanart/clearlogo`。
-- 默认安装 STRM 中文标题监控，每 15 分钟纠正刮削后残留的英文展示标题。
+- 默认安装 STRM 图片和元素补齐监控，每 30 分钟补齐多版本 STRM 的 `*-poster/fanart/backdrop/clearlogo`，并请求 Emby 刷新缺 NFO/图片/简介的项目。
+- 默认安装 STRM 中文标题、简介等修正监控，每 15 分钟纠正刮削后残留的英文展示标题，并请求 Emby 刷新英文简介。
 - 安装 Rclone 和 6096 网页控制台，支持上传并验证 `rclone.conf`、浏览远程目录、手动和定时单向同步。
 - 检查挂载传播、路径、服务和敏感文件。
 - 可选生成不包含媒体数据的 `age` 加密配置备份。
@@ -231,11 +231,12 @@ sudo ./post-auth.sh play-prewarm
 sudo ./scripts/install-emby-play-prewarm.sh uninstall
 ```
 
-## Emby STRM 图片补齐器
+## Emby STRM 图片和元素补齐监控
 
 一键安装会默认安装并启用 `emby-fix-strm-images.timer`。它用于修复多版本 STRM
 常见的空封面问题：同一电影文件夹里 1080p 有 `*-poster.jpg`，但 2160p 缺少
-对应 `*-poster.jpg` 时，Emby 可能只给其中一个版本显示封面。
+对应 `*-poster.jpg` 时，Emby 可能只给其中一个版本显示封面。同时它会检查缺少
+NFO、封面、背景图或简介的项目，并通过 Emby API 触发“搜索缺失的元数据”。
 
 补齐器默认只扫描：
 
@@ -244,8 +245,9 @@ sudo ./scripts/install-emby-play-prewarm.sh uninstall
 /home/symedia_rclone_zero/movies
 ```
 
-它只复制同一电影文件夹里已有的 `poster.jpg`、`fanart.jpg`、`clearlogo.png`
-或其他版本图片，不下载、不覆盖、不改 STRM/NFO/视频。
+它会复制同一电影文件夹里已有的 `poster.jpg`、`fanart.jpg`、`backdrop.jpg`、
+`landscape.jpg`、`clearlogo.png` 或其他版本图片，不覆盖、不改 STRM/视频。
+缺失 NFO/图片/简介时会交给 Emby 自己重新刮削。
 
 检查是否运行：
 
@@ -266,7 +268,7 @@ journalctl -u emby-fix-strm-images.service -n 100 --no-pager
 ```
 
 看到 `COPY|...` 表示补齐了图片；看到 `changed=0` 表示当前没有缺图。完整说明见
-[Emby STRM 图片补齐器](docs/strm-image-fixer.md)。
+[Emby STRM 图片和元素补齐监控](docs/strm-image-fixer.md)。
 
 手动重装或卸载：
 
@@ -275,11 +277,12 @@ sudo ./post-auth.sh strm-image-fixer
 sudo ./scripts/install-emby-strm-image-fixer.sh uninstall
 ```
 
-## Emby STRM 中文标题监控
+## Emby STRM 中文标题、简介等修正监控
 
 如果文件夹已经是中文名，但 Emby 海报墙仍显示 `Rebel Ridge`、
 `Spider-Man: No Way Home` 这类英文标题，通常是 NFO 或 Emby 数据库里保留了旧标题。
-普通刷新元数据有时不会覆盖它。
+普通刷新元数据有时不会覆盖它。若简介仍是英文，本监控也会触发 Emby 重新按中文
+元数据设置刷新。
 
 安装自动监控：
 
@@ -299,9 +302,10 @@ sudo ./scripts/fix-emby-strm-chinese-titles.sh dry-run
 sudo ./post-auth.sh strm-title-fixer apply
 ```
 
-监控每 15 分钟预检一次；只有发现英文标题时才会短暂停止 Emby，备份 `library.db`，
-再按 STRM 所在电影文件夹的中文名修正 `Name` 和 `SortName`。完整说明见
-[Emby STRM 中文标题监控](docs/strm-title-fixer.md)。
+监控每 15 分钟预检一次；发现英文标题时才会短暂停止 Emby，备份 `library.db`，
+再按 STRM 所在电影文件夹的中文名修正 `Name` 和 `SortName`。发现英文简介或未扫过
+项目时，会通过 Emby API 请求中文元数据刷新。完整说明见
+[Emby STRM 中文标题、简介等修正监控](docs/strm-title-fixer.md)。
 
 ## 神医助手导入
 

@@ -1,4 +1,4 @@
-# Emby STRM 图片补齐器
+# Emby STRM 图片和元素补齐监控
 
 多版本 STRM 媒体库里，Emby 有时会按视频文件名前缀寻找本地图片：
 
@@ -20,12 +20,16 @@
 ```
 
 只要同一电影文件夹内已经存在任意可用的 `poster.jpg`、`fanart.jpg`、
-`clearlogo.png` 或对应版本图片，就会补齐：
+`backdrop.jpg`、`landscape.jpg`、`clearlogo.png` 或对应版本图片，就会补齐：
 
-- 文件夹级 `poster.jpg`、`fanart.jpg`、`clearlogo.png`
-- 每个 `.strm` 文件对应的 `*-poster.jpg`、`*-fanart.jpg`、`*-clearlogo.png`
+- 文件夹级 `poster.jpg`、`fanart.jpg`、`backdrop.jpg`、`landscape.jpg`、`clearlogo.png`
+- 每个 `.strm` 文件对应的 `*-poster.jpg`、`*-fanart.jpg`、`*-backdrop.jpg`、`*-landscape.jpg`、`*-clearlogo.png`
 
-它不会下载图片，不会覆盖已有图片，也不会修改 STRM、NFO 或视频文件。
+如果 Emby 数据库中发现某个项目缺少封面、背景图、NFO 或简介，它会调用 Emby API
+触发该项目刷新元数据和图片。实际下载和刮削仍由 Emby 自己完成，遵循媒体库语言、
+刮削器和 NFO 保存设置。
+
+它不会覆盖已有图片，也不会修改 STRM 或视频文件。
 
 ## 安装
 
@@ -41,6 +45,10 @@ emby-fix-strm-images.timer
 ```
 
 默认开机 5 分钟后运行一次，之后每 30 分钟运行一次。
+
+“启动监控”指启用这个 systemd timer，让它按间隔自动检查缺失项；它不是实时文件
+监听。控制台里的“只检查缺失/未扫过”会立即跑一次轻量检查；“全局媒体库扫描”会让
+勾选媒体库内所有项目重新请求 Emby 刷新，耗时和 API 请求都更多。
 
 ## 手动运行
 
@@ -64,10 +72,11 @@ journalctl -u emby-fix-strm-images.service -n 100 --no-pager
 
 ```text
 COPY|/home/symedia_gd/movies/.../poster.jpg|/home/symedia_gd/movies/.../电影名 - 2160p...-poster.jpg
-changed=12
+REFRESH|12345|/home/symedia_gd/movies/.../电影名.strm
+changed=12 refreshed=3 mode=missing
 ```
 
-如果输出 `changed=0`，说明当前没有缺少同名图片的 STRM。
+如果输出 `changed=0 refreshed=0`，说明当前没有缺少同名图片或需要 Emby 刷新的项目。
 
 ## 让 Emby 立即显示
 
