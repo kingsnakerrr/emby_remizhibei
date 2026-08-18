@@ -25,6 +25,7 @@ FIXER_ROOTS = Path("/root/docker-compose/emby-tools/strm-fixer-roots.json")
 EMBY_DB = Path("/root/docker-compose/emby/config/data/library.db")
 RCLONE_CONFIG = Path("/root/.config/rclone/rclone.conf")
 RCLONE_SYNC_SETTINGS = Path("/root/docker-compose/rclone-sync/settings.json")
+RCLONE_SYNC_STATE = Path("/root/docker-compose/rclone-sync/state.json")
 PREWARM_DROPIN = Path("/etc/systemd/system/emby-play-prewarm.service.d/override.conf")
 DOMAIN = "https://hdz.180o.222321.xyz"
 URLS = {
@@ -379,6 +380,101 @@ def sync_tasks() -> list[dict]:
     return tasks
 
 
+def sync_task_unit(task_id: str) -> str:
+    return f"stack-rclone-sync-{sanitize_task_id(task_id)}.service"
+
+
+def sync_task_states() -> dict:
+    data = read_json(RCLONE_SYNC_STATE, {})
+    raw_tasks = data.get("tasks", {})
+    return raw_tasks if isinstance(raw_tasks, dict) else {}
+
+
+def sync_task_runtime(task: dict, saved_states: dict | None = None) -> dict:
+    unit = sync_task_unit(str(task.get("id", task.get("name", "task"))))
+    active = run(["systemctl", "is-active", unit]).stdout.strip() or "inactive"
+    state = (saved_states or {}).get(task.get("id"), {})
+    running = active in {"active", "activating"}
+    status = "同步中" if running else "空闲"
+    return {
+        "unit": unit,
+        "active": active,
+        "running": running,
+        "status": status,
+        "pid": state.get("pid", "无"),
+        "started": state.get("last_started", "无"),
+        "finished": state.get("last_finished", "无"),
+        "exit_code": state.get("last_exit_code", "无"),
+        "message": state.get("last_message", "尚未运行"),
+    }
+
+
+def rclone_sync_command(task: dict) -> list[str]:
+    mode = task.get("mode", "copy")
+    if mode not in {"copy", "sync"}:
+        raise ValueError("同步模式无效。")
+    if mode == "sync" and not task.get("confirm_mirror"):
+        raise ValueError("镜像同步必须勾选确认删除。")
+    remote = str(task.get("remote", "")).strip()
+    if not remote:
+        raise ValueError("Remote 不能为空。")
+    source = f"{remote}:{clean_remote_path(str(task.get('remote_path', '')))}"
+    target = clean_local_path(str(task.get("local_path", "")))
+    command = [
+        "rclone",
+        mode,
+        source,
+        target,
+        "--config",
+        str(RCLONE_CONFIG),
+        "--create-empty-src-dirs",
+        "--stats",
+        "30s",
+        "--log-level",
+        "INFO",
+        "--retries",
+        "3",
+        "--low-level-retries",
+        "10",
+        "--transfers",
+        str(max(1, min(32, int(task.get("transfers", 16))))),
+        "--checkers",
+        str(max(1, min(64, int(task.get("checkers", 16))))),
+    ]
+    if mode == "sync":
+        command.extend(["--delete-after", "--max-delete", "10000"])
+    if task.get("metadata_only"):
+        for pattern in ["*.strm", "*.nfo", "*.jpg", "*.jpeg", "*.png", "*.svg", "*.ass", "*.srt", "*.sup"]:
+            command.extend(["--include", pattern])
+        command.extend(["--exclude", "*"])
+    return command
+
+
+def start_sync_task_once(task: dict) -> None:
+    unit = sync_task_unit(str(task["id"]))
+    command = rclone_sync_command(task)
+    result = run(
+        [
+            "systemd-run",
+            "--collect",
+            "--unit",
+            unit.removesuffix(".service"),
+            "--description",
+            f"Stack Control rclone sync {task.get('name', task['id'])}",
+            "--property",
+            "WorkingDirectory=/root",
+            "--property",
+            "StandardOutput=journal",
+            "--property",
+            "StandardError=journal",
+            *command,
+        ],
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise ValueError(result.stderr.strip() or result.stdout.strip() or "启动同步任务失败。")
+
+
 def timer_interval(unit: str, default_minutes: int) -> int:
     text = run(["systemctl", "cat", unit]).stdout
     match = re.search(r"OnUnitActiveSec=(\d+)\s*min", text)
@@ -467,6 +563,9 @@ def dashboard():
     mount_units = rclone_mount_units()
     containers = [(name, label, container_status(name)) for name, label in DOCKER_CONTAINERS.items()]
     tasks = sync_tasks()
+    task_states = sync_task_states()
+    for task in tasks:
+        task["runtime"] = sync_task_runtime(task, task_states)
     remotes = rclone_remotes()
     return page("控制台", """
 <div class="grid">
@@ -490,17 +589,23 @@ def dashboard():
   {% endfor %}
   {% if not mount_units %}<p class="muted">还没发现 rclone-*.service 挂载。</p>{% endif %}
   </section>
-  <section class="card wide"><h2>Rclone 同步任务</h2><div class="split"><div>
-  {% for task in tasks %}<div class="taskbox"><h3>{{ task.name }}</h3><form method="post" action="{{ url_for('save_sync_task') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="task_id" value="{{ task.id }}">
+  <section class="card wide"><h2>Rclone 同步任务</h2><p class="muted">默认任务：symedia_gd 和 symedia_jav，copy 模式，10 分钟，16/16 并发。每个任务单独控制，互不影响。</p>
+  <form method="post" action="{{ url_for('add_sync_task') }}" class="taskbox"><input type="hidden" name="csrf" value="{{ csrf }}"><div class="row"><label>新增任务名<br><input class="field" name="name" placeholder="例如 symedia_tv" required></label><span></span><p><button class="okbtn" type="submit">添加任务</button></p></div></form>
+  {% for task in tasks %}<div class="taskbox"><h3>{{ task.name }} <span class="pill {{ 'on' if task.runtime.running else 'off' }}">{{ task.runtime.status }}</span></h3>
+    <p class="muted">服务：{{ task.runtime.unit }} / systemd: {{ task.runtime.active }} / PID: {{ task.runtime.pid }} / 退出码: {{ task.runtime.exit_code }}</p>
+    <p class="muted">开始：{{ task.runtime.started }} / 结束：{{ task.runtime.finished }} / {{ task.runtime.message }}</p>
+    <form method="post" action="{{ url_for('save_sync_task') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="task_id" value="{{ task.id }}">
     <div class="row"><label>任务名<br><input class="field" name="name" value="{{ task.name }}" required></label><label>Remote<br><select class="field" name="remote">{% for remote in remotes %}<option value="{{ remote }}" {% if remote == task.remote %}selected{% endif %}>{{ remote }}</option>{% endfor %}{% if task.remote and task.remote not in remotes %}<option value="{{ task.remote }}" selected>{{ task.remote }}</option>{% endif %}</select></label><label>间隔分钟<br><input class="tiny" type="number" name="interval_minutes" min="1" max="1440" value="{{ task.interval_minutes }}"></label></div>
     <div class="row"><label>云端目录<br><input class="field" name="remote_path" value="{{ task.remote_path }}" required></label><label>本地目录<br><input class="field" name="local_path" value="{{ task.local_path }}" required></label><span></span></div>
     <div class="row"><label>传输并发<br><input class="tiny" type="number" name="transfers" min="1" max="32" value="{{ task.transfers }}"></label><label>检查并发<br><input class="tiny" type="number" name="checkers" min="1" max="64" value="{{ task.checkers }}"></label><label>模式<br><select class="field" name="mode"><option value="copy" {% if task.mode == 'copy' %}selected{% endif %}>copy 不删本地</option><option value="sync" {% if task.mode == 'sync' %}selected{% endif %}>sync 镜像</option></select></label></div>
     <p><label><input type="checkbox" name="enabled" {% if task.enabled %}checked{% endif %}> 启用定时同步</label> <label><input type="checkbox" name="metadata_only" {% if task.metadata_only %}checked{% endif %}> 只传 STRM/NFO/图片/字幕</label> <label><input type="checkbox" name="confirm_mirror" {% if task.confirm_mirror %}checked{% endif %}> 确认镜像删除</label></p>
-    <p><button type="submit">保存</button><button formaction="{{ url_for('delete_sync_task') }}" class="danger" type="submit" onclick="return confirm('删除这个同步任务？')">删除</button></p>
+    <p><button type="submit">保存</button><button formaction="{{ url_for('sync_task_action') }}" name="action" value="run" class="okbtn" type="submit">立即同步</button><button formaction="{{ url_for('sync_task_action') }}" name="action" value="stop" class="danger" type="submit">停止</button><button formaction="{{ url_for('sync_task_action') }}" name="action" value="log" type="submit">日志</button><button formaction="{{ url_for('delete_sync_task') }}" class="danger" type="submit" onclick="return confirm('删除这个同步任务？')">删除</button></p>
   </form></div>{% endfor %}
-  </div><aside class="card"><h3>控制</h3><p class="muted">默认任务：symedia_gd 和 symedia_jav，copy 模式，10 分钟，16/16 并发。保存后会重启 rclone-sync-web 让配置生效。</p><form method="post" action="{{ url_for('add_sync_task') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><p><input class="field" name="name" placeholder="新任务名，例如 symedia_tv" required></p><p><button class="okbtn" type="submit">添加任务</button></p></form><form method="post" action="{{ url_for('unit_action') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="rclone-sync-web.service"><p><button name="action" value="start" class="okbtn">启动同步控制台</button><button name="action" value="restart">重启</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="log">日志</button></p></form></aside></div></section>
+  </section>
   <section class="card wide"><h2>自定义服务和定时器</h2><table><thead><tr><th>功能</th><th>状态</th><th>开机</th><th>操作</th></tr></thead><tbody>
-  {% for name, meta, st in units %}<tr><td><strong>{{ meta.label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.active in ['active','activating'] else 'off' if st.exists else 'unknown' }}">{{ st.active }}</span></td><td>{{ st.enabled }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('unit_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button>{% if meta.run_unit %}<button name="action" value="run" class="warn">运行一次</button>{% endif %}<button name="action" value="log">日志</button></form>{% endif %}</td></tr>{% endfor %}
+  {% for name, meta, st in units %}<tr><td><strong>{{ meta.label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.active in ['active','activating'] else 'off' if st.exists else 'unknown' }}">{{ st.active }}</span></td><td>{{ st.enabled }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('unit_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button>{% if meta.run_unit %}<button name="action" value="run" class="warn">运行一次</button>{% endif %}<button name="action" value="log">日志</button></form>{% endif %}</td></tr>
+  {% if name == 'emby-play-prewarm.service' %}<tr><td colspan="4"><div class="subcard"><h3>播放预热参数</h3><p class="muted">当前：头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }}，尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }}，并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</p><form method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><div class="row"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label></div><p><button type="submit">保存并重启预热服务</button></p></form></div></td></tr>{% endif %}
+  {% endfor %}
   </tbody></table></section>
   <section class="card wide"><h2>Docker 容器</h2><table><thead><tr><th>容器</th><th>状态</th><th>重启次数</th><th>操作</th></tr></thead><tbody>
   {% for name, label, st in containers %}<tr><td><strong>{{ label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.running else 'off' if st.exists else 'unknown' }}">{{ st.status }}</span></td><td>{{ st.restarts }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('container_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button><button name="action" value="log">日志</button></form>{% endif %}</td></tr>{% endfor %}
@@ -532,7 +637,6 @@ def dashboard():
       <p><button type="submit">保存 STRM 监控设置</button></p>
     </form>
   </section>
-  <section class="card"><h2>播放预热参数</h2><p class="muted">当前：头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }}，尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }}，并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</p><form method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><div class="row"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label></div><p><button type="submit">保存并重启预热服务</button></p></form></section>
 </div>
 """, units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_timer=unit_status("emby-fix-strm-images.timer"), title_timer=unit_status("emby-fix-strm-titles.timer"), prewarm=read_prewarm_env(), mb=mb, csrf=csrf_token())
 
@@ -603,41 +707,73 @@ def clean_local_path(value: str) -> str:
     return str(resolved)
 
 
+def update_sync_task_from_form(data: dict, task_id: str) -> dict:
+    task = None
+    for item in data.get("tasks", []):
+        if item.get("id") == task_id:
+            task = item
+            break
+    if task is None:
+        raise ValueError("同步任务不存在。")
+    mode = request.form.get("mode", "copy")
+    if mode not in {"copy", "sync"}:
+        raise ValueError("同步模式无效。")
+    if mode == "sync" and request.form.get("confirm_mirror") != "on":
+        raise ValueError("镜像同步必须勾选确认删除。")
+    task.update(
+        {
+            "name": request.form.get("name", task_id).strip() or task_id,
+            "remote": request.form.get("remote", "").strip(),
+            "remote_path": clean_remote_path(request.form.get("remote_path", "")),
+            "local_path": clean_local_path(request.form.get("local_path", "")),
+            "interval_minutes": max(1, min(1440, int(request.form.get("interval_minutes", "10")))),
+            "transfers": max(1, min(32, int(request.form.get("transfers", "16")))),
+            "checkers": max(1, min(64, int(request.form.get("checkers", "16")))),
+            "mode": mode,
+            "enabled": request.form.get("enabled") == "on",
+            "metadata_only": request.form.get("metadata_only") == "on",
+            "confirm_mirror": request.form.get("confirm_mirror") == "on",
+        }
+    )
+    return task
+
+
 @app.route("/sync-task/save", methods=["POST"])
 def save_sync_task():
     try:
         require_csrf()
         task_id = request.form.get("task_id", "")
         data = sync_settings()
-        task = None
-        for item in data.get("tasks", []):
-            if item.get("id") == task_id:
-                task = item
-                break
-        if task is None:
-            raise ValueError("同步任务不存在。")
-        mode = request.form.get("mode", "copy")
-        if mode not in {"copy", "sync"}:
-            raise ValueError("同步模式无效。")
-        if mode == "sync" and request.form.get("confirm_mirror") != "on":
-            raise ValueError("镜像同步必须勾选确认删除。")
-        task.update(
-            {
-                "name": request.form.get("name", task_id).strip() or task_id,
-                "remote": request.form.get("remote", "").strip(),
-                "remote_path": clean_remote_path(request.form.get("remote_path", "")),
-                "local_path": clean_local_path(request.form.get("local_path", "")),
-                "interval_minutes": max(1, min(1440, int(request.form.get("interval_minutes", "10")))),
-                "transfers": max(1, min(32, int(request.form.get("transfers", "16")))),
-                "checkers": max(1, min(64, int(request.form.get("checkers", "16")))),
-                "mode": mode,
-                "enabled": request.form.get("enabled") == "on",
-                "metadata_only": request.form.get("metadata_only") == "on",
-                "confirm_mirror": request.form.get("confirm_mirror") == "on",
-            }
-        )
+        update_sync_task_from_form(data, task_id)
         save_sync_settings(data)
         flash("同步任务已保存。")
+    except (ValueError, OSError, subprocess.TimeoutExpired) as error:
+        flash(str(error))
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/sync-task/action", methods=["POST"])
+def sync_task_action():
+    try:
+        require_csrf()
+        task_id = request.form.get("task_id", "")
+        action = request.form.get("action", "")
+        data = sync_settings()
+        task = update_sync_task_from_form(data, task_id)
+        save_sync_settings(data)
+        unit = sync_task_unit(task_id)
+        if action == "run":
+            start_sync_task_once(task)
+            flash(f"{task.get('name', task_id)} 已开始同步。")
+        elif action == "stop":
+            result = run(["systemctl", "stop", unit], timeout=120)
+            if result.returncode != 0 and "not loaded" not in (result.stderr + result.stdout).lower():
+                raise ValueError(result.stderr.strip() or result.stdout.strip() or "停止同步任务失败。")
+            flash(f"{task.get('name', task_id)} 已停止。")
+        elif action == "log":
+            return show_log(unit, "journal")
+        else:
+            raise ValueError("不允许的操作。")
     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
         flash(str(error))
     return redirect(url_for("dashboard"))
@@ -677,6 +813,7 @@ def delete_sync_task():
         data["tasks"] = [task for task in data.get("tasks", []) if task.get("id") != task_id]
         if len(data["tasks"]) == before:
             raise ValueError("同步任务不存在。")
+        run(["systemctl", "stop", sync_task_unit(task_id)], timeout=30)
         save_sync_settings(data)
         flash("同步任务已删除。")
     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
