@@ -1,27 +1,28 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-DB="/root/docker-compose/emby/config/data/library.db"
 BACKUP_DIR="/root/metadata-fix-backups"
-TOOL_DIR="/root/docker-compose/emby-tools"
-TOOL="${TOOL_DIR}/fix-strm-chinese-titles.py"
-DRY_RUN=0
+TARGET="/root/docker-compose/emby-tools"
+TOOL="${TARGET}/fix-strm-chinese-titles.py"
+SERVICE="/etc/systemd/system/emby-fix-strm-titles.service"
+TIMER="/etc/systemd/system/emby-fix-strm-titles.timer"
 
 if [[ ${EUID} -ne 0 ]]; then
   echo "请使用 root 或 sudo 运行。"
   exit 1
 fi
 
-case "${1:-apply}" in
-  apply) ;;
-  dry-run) DRY_RUN=1 ;;
+ACTION="${1:-install}"
+SELF="$(readlink -f -- "${BASH_SOURCE[0]}")"
+case "${ACTION}" in
+  install|status|run|uninstall|apply|dry-run) ;;
   *)
-    echo "用法: $0 [apply|dry-run]"
+    echo "用法: $0 [install|status|run|uninstall|apply|dry-run]"
     exit 2
     ;;
 esac
 
-install -d -m 0755 "${TOOL_DIR}"
+install -d -m 0755 "${TARGET}"
 install -d -m 0755 "${BACKUP_DIR}"
 
 cat >"${TOOL}" <<'PY'
@@ -78,19 +79,13 @@ def fix_nfo(path: str, title: str, dry_run: bool) -> bool:
     return changed
 
 
-def main() -> int:
-    dry_run = os.environ.get("DRY_RUN") == "1"
-    if not DB.exists():
-        raise SystemExit(f"missing db: {DB}")
-
-    con = sqlite3.connect(DB)
-    cur = con.cursor()
+def find_changes(cur: sqlite3.Cursor, dry_run: bool) -> tuple[list[tuple[int, str, str, str]], int]:
     cur.execute(
         "select Id, Name, SortName, OriginalTitle, Path from MediaItems "
         "where Path like '/home/symedia_rclone_zero/movies/%' "
         "or Path like '/home/symedia_gd/movies/%'"
     )
-    changes = []
+    changes: list[tuple[int, str, str, str]] = []
     nfo_changes = 0
     for item_id, name, sort_name, original_title, path in cur.fetchall():
         if not path or not path.endswith(".strm"):
@@ -103,11 +98,27 @@ def main() -> int:
             continue
         changes.append((item_id, current, title, path))
         nfo_changes += int(fix_nfo(path, title, dry_run))
+    return changes, nfo_changes
+
+
+def main() -> int:
+    dry_run = os.environ.get("DRY_RUN") == "1"
+    if not DB.exists():
+        raise SystemExit(f"missing db: {DB}")
+
+    con = sqlite3.connect(DB)
+    cur = con.cursor()
+    changes, nfo_changes = find_changes(cur, dry_run)
 
     if dry_run:
         print(f"dry_run=1 changed={len(changes)} nfo_changed={nfo_changes}")
         for item_id, old_name, title, path in changes:
             print(f"WOULD_FIX|{item_id}|{old_name}|{title}|{path}")
+        con.close()
+        return 0
+
+    if not changes:
+        print("changed=0 nfo_changed=0")
         con.close()
         return 0
 
@@ -140,13 +151,72 @@ PY
 
 chmod +x "${TOOL}"
 
-if [[ ${DRY_RUN} -eq 1 ]]; then
+if [[ "${ACTION}" == "status" ]]; then
+  systemctl --no-pager --full status emby-fix-strm-titles.timer || true
+  systemctl --no-pager --full status emby-fix-strm-titles.service || true
+  exit 0
+fi
+
+if [[ "${ACTION}" == "run" ]]; then
+  systemctl start emby-fix-strm-titles.service
+  systemctl --no-pager --full status emby-fix-strm-titles.service
+  exit 0
+fi
+
+if [[ "${ACTION}" == "uninstall" ]]; then
+  systemctl disable --now emby-fix-strm-titles.timer 2>/dev/null || true
+  rm -f "${SERVICE}" "${TIMER}"
+  systemctl daemon-reload
+  echo "Emby STRM 中文标题监控已卸载，保留工具：${TOOL}"
+  exit 0
+fi
+
+if [[ "${ACTION}" == "dry-run" ]]; then
   DRY_RUN=1 python3 "${TOOL}"
   exit 0
 fi
 
-echo "停止 Emby，备份并修复 STRM 中文标题……"
-docker stop emby >/dev/null
-python3 "${TOOL}"
-docker start emby >/dev/null
-echo "已重启 Emby。若客户端仍显示旧标题，刷新页面或清理客户端缓存。"
+if [[ "${ACTION}" == "apply" ]]; then
+  pending="$(DRY_RUN=1 python3 "${TOOL}" | sed -n 's/^dry_run=1 changed=\([0-9]\+\).*/\1/p' | tail -1)"
+  if [[ "${pending:-0}" == "0" ]]; then
+    echo "没有发现需要修正的英文标题，不重启 Emby。"
+    exit 0
+  fi
+  echo "发现 ${pending} 个英文标题，停止 Emby 后修复……"
+  docker stop emby >/dev/null
+  python3 "${TOOL}"
+  docker start emby >/dev/null
+  echo "已重启 Emby。若客户端仍显示旧标题，刷新页面或清理客户端缓存。"
+  exit 0
+fi
+
+cat >"${SERVICE}" <<EOF
+[Unit]
+Description=Fix English titles in Emby STRM libraries
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=${SELF} apply
+EOF
+
+cat >"${TIMER}" <<'EOF'
+[Unit]
+Description=Run Emby STRM Chinese title fixer periodically
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=emby-fix-strm-titles.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now emby-fix-strm-titles.timer
+systemctl start emby-fix-strm-titles.service || true
+systemctl --no-pager --full status emby-fix-strm-titles.timer || true
+echo "Emby STRM 中文标题监控已安装。"
