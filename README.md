@@ -6,6 +6,7 @@
 - Symedia 生成 STRM/NFO 等本地媒体元素；
 - Emby 扫描入库并直连播放；
 - Emby 播放预热器自动预读冷片源头尾，缓解第一次起播慢；
+- Emby STRM 图片补齐器自动补齐多版本 STRM 缺失的本地封面；
 - EmbyStream 作为最后按需安装的可选备用线路，通过 Google Drive API 读取；
 - Rclone 网页控制台把另一团队盘中的 STRM/NFO/图片单向增量同步到本地；
 - 神医助手在用户自行安装和授权后应用已验证的播放相关设置。
@@ -55,6 +56,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | CloudDrive2 | `cloudnas/clouddrive2` | 固定当前验证过的镜像摘要 |
 | Emby | `amilys/embyserver` | 与当前神医环境兼容的第三方定制镜像，不是 Emby 官方镜像 |
 | Emby 播放预热器 | 本仓库 `scripts/install-emby-play-prewarm.sh` | 默认安装为 systemd 服务，播放时预读 CD2 媒体头尾 Range |
+| Emby STRM 图片补齐器 | 本仓库 `scripts/install-emby-strm-image-fixer.sh` | 默认安装为 systemd timer，补齐多版本 STRM 缺失的本地图片名 |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
 | EmbyStream | 上游 v0.0.43 + 本仓库刷新调度补丁 | GitHub Actions 可复现构建，固定版本并校验 SHA512 |
 | Rclone 同步控制台 | Debian/Ubuntu 的 `rclone`、`python3-flask` | 本仓库网页服务，端口 6096 |
@@ -67,6 +69,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 /root/docker-compose/
 ├── clouddrive2
 ├── emby
+├── emby-tools
 ├── emby-play-prewarm
 ├── embystream
 ├── rclone-sync
@@ -94,6 +97,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 - 固定 Symedia 为当前服务器已验证的镜像摘要，避免 `latest` 漂移。
 - 用户在向导最后选择后才安装 EmbyStream v0.0.43-p1，并校验本仓库发布包 SHA512。p1 修复 OAuth 失败时刷新调度器忙循环导致的 CPU 和日志暴涨。
 - 在神医助手已安装后，一键应用播放相关设置和凌晨任务。
+- 默认安装 STRM 图片补齐器，每 30 分钟补齐多版本 STRM 的 `*-poster/fanart/clearlogo`。
 - 安装 Rclone 和 6096 网页控制台，支持上传并验证 `rclone.conf`、浏览远程目录、手动和定时单向同步。
 - 检查挂载传播、路径、服务和敏感文件。
 - 可选生成不包含媒体数据的 `age` 加密配置备份。
@@ -181,7 +185,7 @@ Google、CD2、Emby 的登录密码。
 
 一键安装会默认安装并启动 `emby-play-prewarm.service`。它可以先于 CD2 授权和 Emby 媒体库配置安装；没有播放日志时只会等待，不会影响正式播放。
 
-它的作用是监听 Emby 的真实播放请求：客户端点击播放并触发 `PlaybackInfo?IsPlayback=true` 后，后台提前读取该影片的头部 8 MiB 和尾部 1 MiB，让 CD2/团队盘冷片源先热起来。直连 `8096`、HTTPS `443`、Nginx 反代、BWG/BWGG 中转都能触发，只要最终请求进入同一台 Emby。
+它的作用是监听 Emby 的真实播放请求：客户端点击播放并触发 `PlaybackInfo?IsPlayback=true` 后，后台提前读取该影片的头部 32 MiB 和尾部 4 MiB，让 rclone/CD2/团队盘冷片源先热起来。直连 `8096`、HTTPS `443`、Nginx 反代、BWG/BWGG 中转都能触发，只要最终请求进入同一台 Emby。
 
 检查服务是否运行：
 
@@ -211,7 +215,7 @@ journalctl -u emby-play-prewarm.service -f
 
 ```text
 schedule item=564916 user=...
-prewarm item=564916 container=mkv head={'status': 206, 'bytes': 8388608, ...} tail={'status': 206, 'bytes': 1048576, ...}
+prewarm item=564916 container=mkv head={'status': 206, 'bytes': 33554432, ...} tail={'status': 206, 'bytes': 4194304, ...}
 ```
 
 其中 `head status=206` 和 `tail status=206` 表示头尾 Range 都读成功。完整说明见
@@ -222,6 +226,50 @@ prewarm item=564916 container=mkv head={'status': 206, 'bytes': 8388608, ...} ta
 ```bash
 sudo ./post-auth.sh play-prewarm
 sudo ./scripts/install-emby-play-prewarm.sh uninstall
+```
+
+## Emby STRM 图片补齐器
+
+一键安装会默认安装并启用 `emby-fix-strm-images.timer`。它用于修复多版本 STRM
+常见的空封面问题：同一电影文件夹里 1080p 有 `*-poster.jpg`，但 2160p 缺少
+对应 `*-poster.jpg` 时，Emby 可能只给其中一个版本显示封面。
+
+补齐器默认只扫描：
+
+```text
+/home/symedia_gd/movies
+/home/symedia_rclone_zero/movies
+```
+
+它只复制同一电影文件夹里已有的 `poster.jpg`、`fanart.jpg`、`clearlogo.png`
+或其他版本图片，不下载、不覆盖、不改 STRM/NFO/视频。
+
+检查是否运行：
+
+```bash
+systemctl is-active emby-fix-strm-images.timer
+```
+
+手动运行一次：
+
+```bash
+sudo ./scripts/install-emby-strm-image-fixer.sh run
+```
+
+查看日志：
+
+```bash
+journalctl -u emby-fix-strm-images.service -n 100 --no-pager
+```
+
+看到 `COPY|...` 表示补齐了图片；看到 `changed=0` 表示当前没有缺图。完整说明见
+[Emby STRM 图片补齐器](docs/strm-image-fixer.md)。
+
+手动重装或卸载：
+
+```bash
+sudo ./post-auth.sh strm-image-fixer
+sudo ./scripts/install-emby-strm-image-fixer.sh uninstall
 ```
 
 ## 神医助手导入
