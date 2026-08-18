@@ -28,6 +28,9 @@ case "${ACTION}" in
   strm-title-fixer)
     "${REPO_DIR}/scripts/fix-emby-strm-chinese-titles.sh" "${2:-install}"
     ;;
+  stack-control)
+    "${REPO_DIR}/scripts/install-stack-control-web.sh" "${2:-install}"
+    ;;
   symedia)
     "${REPO_DIR}/scripts/audit-symedia.sh"
     ;;
@@ -35,7 +38,7 @@ case "${ACTION}" in
     "${REPO_DIR}/scripts/install-home-media-backup.sh" "${2:-}"
     ;;
   *)
-    echo "Usage: $0 {cd2|strm-assistant|embystream|play-prewarm|strm-image-fixer|strm-title-fixer|symedia|home-media-backup}"
+    echo "Usage: $0 {cd2|strm-assistant|embystream|play-prewarm|strm-image-fixer|strm-title-fixer|stack-control|symedia|home-media-backup}"
     exit 2
     ;;
 esac
