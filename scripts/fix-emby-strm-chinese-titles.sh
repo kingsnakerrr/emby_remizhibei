@@ -45,6 +45,7 @@ from pathlib import Path
 
 
 DB = Path("/root/docker-compose/emby/config/data/library.db")
+AUTH_DB = Path("/root/docker-compose/emby/config/data/authentication.db")
 BACKUP_DIR = Path("/root/metadata-fix-backups")
 CONFIG = Path("/root/docker-compose/emby-tools/strm-fixer-roots.json")
 EMBY_BASE = "http://127.0.0.1:8096"
@@ -70,7 +71,28 @@ def clean_token(value: str) -> str:
     return "".join(ch for ch in urllib.parse.unquote(value).strip() if ch.isalnum())
 
 
+def emby_db_token() -> str:
+    if not AUTH_DB.exists():
+        return ""
+    try:
+        con = sqlite3.connect(f"file:{AUTH_DB}?mode=ro", uri=True)
+        row = con.execute(
+            "select AccessToken from Tokens_2 where IsActive=1 "
+            "order by DateLastActivityInt desc limit 1"
+        ).fetchone()
+        con.close()
+    except sqlite3.Error:
+        return ""
+    if not row:
+        return ""
+    token = clean_token(str(row[0]))
+    return token if len(token) >= 20 else ""
+
+
 def emby_token() -> str:
+    token = emby_db_token()
+    if token:
+        return token
     for path in TOKEN_FILES:
         try:
             text = path.read_text("utf-8", errors="ignore")

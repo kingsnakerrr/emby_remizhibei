@@ -550,14 +550,13 @@ def fixer_settings(libs: list[str]) -> dict:
     return data
 
 
-def fixer_runtime(service: str) -> dict[str, str]:
-    status = unit_status(service)
-    active = status.get("active", "unknown")
-    if active in {"active", "activating"}:
-        return {"state": "运行中", "class": "on", "active": active}
-    if active in {"inactive", "deactivating"}:
-        return {"state": "空闲", "class": "unknown", "active": active}
-    return {"state": active, "class": "off", "active": active}
+def fixer_runtime(*services: str) -> dict[str, str]:
+    states = [unit_status(service).get("active", "unknown") for service in services]
+    if any(active in {"active", "activating"} for active in states):
+        return {"state": "运行中", "class": "on", "active": ",".join(states)}
+    if all(active in {"inactive", "deactivating", "not-found"} for active in states):
+        return {"state": "空闲", "class": "unknown", "active": ",".join(states)}
+    return {"state": ",".join(states), "class": "off", "active": ",".join(states)}
 
 
 def web_apps() -> list[dict[str, str]]:
@@ -661,9 +660,9 @@ def dashboard():
   {% if name == 'autofilm' %}<tr><td colspan="4"><details class="subcard"><summary><strong>AutoFilm 使用方法和编辑配置</strong></summary><ul class="help-list muted"><li>AutoFilm 当前主要靠 `config.yaml` 里的 cron 定时任务运行，不是独立网页面板。</li><li>`config.yaml` 配 Alist/OpenList、媒体服务器、生成 STRM、追番和海报任务；`compose.yaml` 配容器挂载路径。</li><li>保存主配置会重启 AutoFilm；保存 compose 会执行 `docker compose up -d` 重建容器。</li></ul><div class="subgrid">{% for key in ['autofilm_yaml','autofilm_compose'] %}{% set cfg = configs[key] %}<form method="post" action="{{ url_for('save_config') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ key }}"><h3>{{ cfg.label }}</h3><p class="muted">{{ cfg.path }}</p><textarea class="editor" name="content" spellcheck="false">{{ cfg.content }}</textarea><p><button type="submit">保存并应用 AutoFilm</button></p></form>{% endfor %}</div></details></td></tr>{% endif %}
   {% endfor %}
   </tbody></table></section>
-  <section class="card wide"><h2>STRM 监控设置</h2>
+  <section id="strm-monitor" class="card wide"><h2>STRM 监控设置</h2>
     <p class="muted">新增媒体库会从 Emby 数据库自动出现；全部不勾选时，对应监控不会扫描任何库。</p>
-    <form method="post" action="{{ url_for('save_fixers') }}"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <form method="post" action="{{ url_for('save_fixers', _anchor='strm-monitor') }}"><input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="subgrid">
         <div class="subcard">
           <h3>图片和元素补齐监控</h3>
@@ -672,7 +671,7 @@ def dashboard():
           <p><label>运行间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
           <div class="checks">{% for lib in libs %}<label><input type="checkbox" name="image_roots" value="{{ lib }}" {% if lib in fixers.image_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
-          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image" class="warn" type="submit">补齐缺失和未扫描</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局扫描补齐会让勾选媒体库全部重新请求 Emby 刮削，确定执行？')">全局扫描补齐</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image-log" type="submit">日志</button></p>
+          <p><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="image" class="warn" type="submit">补齐缺失和未扫描</button><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="image-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局扫描补齐会让勾选媒体库全部重新请求 Emby 刮削，确定执行？')">全局扫描补齐</button><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="image-log" type="submit">日志</button></p>
         </div>
         <div class="subcard">
           <h3>中文标题、简介等修正监控</h3>
@@ -681,7 +680,7 @@ def dashboard():
           <p><label>运行间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
           <div class="checks">{% for lib in libs %}<label><input type="checkbox" name="title_roots" value="{{ lib }}" {% if lib in fixers.title_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
-          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title" class="warn" type="submit">补齐缺失和未扫描</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局扫描补齐会让勾选媒体库全部重新请求中文元数据，确定执行？')">全局扫描补齐</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title-log" type="submit">日志</button></p>
+          <p><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="title" class="warn" type="submit">补齐缺失和未扫描</button><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="title-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局扫描补齐会让勾选媒体库全部重新请求中文元数据，确定执行？')">全局扫描补齐</button><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="title-log" type="submit">日志</button></p>
         </div>
       </div>
       {% if not libs %}<p class="muted">还没从 Emby 数据库发现 /home 下的 STRM 媒体库。</p>{% endif %}
@@ -689,7 +688,7 @@ def dashboard():
     </form>
   </section>
 </div>
-""", units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_runtime=fixer_runtime("emby-fix-strm-images.service"), title_runtime=fixer_runtime("emby-fix-strm-titles.service"), prewarm=read_prewarm_env(), configs={key: editable_config(key) for key in CONFIG_EDITORS}, mb=mb, csrf=csrf_token())
+""", units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_runtime=fixer_runtime("emby-fix-strm-images.service", "emby-fix-strm-images-full.service"), title_runtime=fixer_runtime("emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service"), prewarm=read_prewarm_env(), configs={key: editable_config(key) for key in CONFIG_EDITORS}, mb=mb, csrf=csrf_token())
 
 
 @app.route("/unit", methods=["POST"])
@@ -935,7 +934,7 @@ def save_fixers():
         flash("STRM 监控设置已保存。")
     except (ValueError, subprocess.TimeoutExpired) as error:
         flash(str(error))
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("dashboard", _anchor="strm-monitor"))
 
 
 def save_fixer_config_from_form() -> dict:
@@ -970,8 +969,8 @@ def run_fixer_once():
         if kind == "title-log":
             return show_log("emby-fix-strm-titles.service", "journal")
         commands = {
-            "image": ["systemctl", "start", "emby-fix-strm-images.service"],
-            "title": ["systemctl", "start", "emby-fix-strm-titles.service"],
+            "image": ["systemctl", "start", "--no-block", "emby-fix-strm-images.service"],
+            "title": ["systemctl", "start", "--no-block", "emby-fix-strm-titles.service"],
             "image-full": ["systemd-run", "--unit", "emby-fix-strm-images-full", "--collect", "--property=Type=oneshot", "--setenv=FIX_REFRESH_MODE=full", "/usr/bin/python3", "/root/docker-compose/emby-tools/fix-strm-images.py"],
             "title-full": ["systemd-run", "--unit", "emby-fix-strm-titles-full", "--collect", "--property=Type=oneshot", "/bin/bash", "-lc", "FIX_REFRESH_MODE=full /root/docker-compose/emby-tools/fix-emby-strm-chinese-titles.sh apply"],
         }
@@ -981,10 +980,10 @@ def run_fixer_once():
         result = run(command, timeout=120)
         if result.returncode != 0:
             raise ValueError(result.stderr.strip() or result.stdout.strip() or "运行失败。")
-        flash("已触发运行一次。")
+        flash("已触发后台运行，刷新本区块可看运行状态；完成结果看日志按钮。")
     except (ValueError, subprocess.TimeoutExpired) as error:
         flash(str(error))
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("dashboard", _anchor="strm-monitor"))
 
 
 @app.route("/prewarm", methods=["POST"])
