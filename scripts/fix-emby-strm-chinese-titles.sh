@@ -66,6 +66,10 @@ TOKEN_RE = re.compile(r'token\s*=\s*"([^"]+)"|api_key=([^&\s]+)|Token="([^"]+)"'
 MODE = os.environ.get("FIX_REFRESH_MODE", "missing")
 
 
+def clean_token(value: str) -> str:
+    return "".join(ch for ch in urllib.parse.unquote(value).strip() if ch.isalnum())
+
+
 def emby_token() -> str:
     for path in TOKEN_FILES:
         try:
@@ -74,7 +78,7 @@ def emby_token() -> str:
             continue
         for groups in TOKEN_RE.findall(text):
             token = next((part for part in groups if part), "")
-            token = urllib.parse.unquote(token).strip()
+            token = clean_token(token)
             if len(token) >= 20:
                 return token
     log_path = Path("/root/docker-compose/emby/config/logs/embyserver.txt")
@@ -84,7 +88,7 @@ def emby_token() -> str:
         return ""
     for groups in TOKEN_RE.findall(text):
         token = next((part for part in groups if part), "")
-        token = urllib.parse.unquote(token).strip()
+        token = clean_token(token)
         if len(token) >= 20:
             return token
     return ""
@@ -119,11 +123,14 @@ def title_from_path(path: str) -> str | None:
     return None
 
 
-def fix_nfo(path: str, title: str, dry_run: bool) -> bool:
+def fix_nfo(path: str, title: str, dry_run: bool) -> tuple[bool, str]:
     nfo = Path(path).with_suffix(".nfo")
     if not nfo.exists():
-        return False
-    data = nfo.read_text("utf-8", errors="replace")
+        return False, "missing"
+    try:
+        data = nfo.read_text("utf-8", errors="replace")
+    except OSError as exc:
+        return False, str(exc)
     changed = False
     match = TITLE_RE.search(data)
     if match and match.group(2).strip() != title:
@@ -138,8 +145,11 @@ def fix_nfo(path: str, title: str, dry_run: bool) -> bool:
         data = data.replace("</title>", f"</title>\n  <sorttitle>{title}</sorttitle>", 1)
         changed = True
     if changed and not dry_run:
-        nfo.write_text(data, "utf-8")
-    return changed
+        try:
+            nfo.write_text(data, "utf-8")
+        except OSError as exc:
+            return False, str(exc)
+    return changed, "changed" if changed else "unchanged"
 
 
 def nfo_has_chinese_overview(path: str) -> bool:
@@ -172,7 +182,7 @@ def refresh_item(item_id: int, token: str, full: bool) -> bool:
         return 200 <= resp.status < 300
 
 
-def find_changes(cur: sqlite3.Cursor, dry_run: bool) -> tuple[list[tuple[int, str, str, str]], int, list[tuple[int, str, str, str]]]:
+def find_changes(cur: sqlite3.Cursor, dry_run: bool) -> tuple[list[tuple[int, str, str, str]], int, list[tuple[int, str, str, str]], dict]:
     cur.execute(
         "select Id, Name, SortName, OriginalTitle, Path, Overview, DateLastRefreshed from MediaItems "
         "where Path like '/home/%'"
@@ -180,9 +190,12 @@ def find_changes(cur: sqlite3.Cursor, dry_run: bool) -> tuple[list[tuple[int, st
     changes: list[tuple[int, str, str, str]] = []
     refreshes: list[tuple[int, str, str, str]] = []
     nfo_changes = 0
+    stats = {"items_scanned": 0, "strm_checked": 0, "title_needed": 0, "overview_refresh_needed": 0, "nfo_failed": []}
     for item_id, name, sort_name, original_title, path, overview, date_last_refreshed in cur.fetchall():
+        stats["items_scanned"] += 1
         if not path or not path.endswith(".strm"):
             continue
+        stats["strm_checked"] += 1
         title = title_from_path(path)
         if not title:
             continue
@@ -192,11 +205,16 @@ def find_changes(cur: sqlite3.Cursor, dry_run: bool) -> tuple[list[tuple[int, st
         needs_overview = not overview_text.strip() or not CJK.search(overview_text)
         needs_first_scan = not date_last_refreshed
         if needs_title:
+            stats["title_needed"] += 1
             changes.append((item_id, current, title, path))
-        nfo_changes += int(fix_nfo(path, title, dry_run))
+        nfo_changed, nfo_reason = fix_nfo(path, title, dry_run)
+        nfo_changes += int(nfo_changed)
+        if nfo_reason not in {"missing", "unchanged", "changed"}:
+            stats["nfo_failed"].append((item_id, path, nfo_reason))
         if MODE == "full" or needs_overview or needs_first_scan or not nfo_has_chinese_overview(path):
+            stats["overview_refresh_needed"] += 1
             refreshes.append((item_id, current, title, path))
-    return changes, nfo_changes, refreshes
+    return changes, nfo_changes, refreshes, stats
 
 
 def main() -> int:
@@ -206,20 +224,36 @@ def main() -> int:
 
     con = sqlite3.connect(DB)
     cur = con.cursor()
-    changes, nfo_changes, refreshes = find_changes(cur, dry_run)
+    changes, nfo_changes, refreshes, stats = find_changes(cur, dry_run)
     mode = MODE
 
     if dry_run:
-        print(f"dry_run=1 changed={len(changes)} nfo_changed={nfo_changes} refresh={len(refreshes)} mode={mode}")
+        print(
+            "SUMMARY|chinese_metadata|dry_run=1|"
+            f"items_scanned={stats['items_scanned']}|strm_checked={stats['strm_checked']}|"
+            f"title_needed={len(changes)}|nfo_changed={nfo_changes}|nfo_failed={len(stats['nfo_failed'])}|"
+            f"refresh_needed={len(refreshes)}|mode={mode}"
+        )
+        print(f"dry_run=1 changed={len(changes)} nfo_changed={nfo_changes} refresh={len(refreshes)} failed={len(stats['nfo_failed'])} mode={mode}")
         for item_id, old_name, title, path in changes:
             print(f"WOULD_FIX|{item_id}|{old_name}|{title}|{path}")
         for item_id, old_name, title, path in refreshes:
             print(f"WOULD_REFRESH|{item_id}|{old_name}|{title}|{path}")
+        for item_id, path, reason in stats["nfo_failed"]:
+            print(f"FAIL|nfo|item={item_id}|path={path}|reason={reason}")
         con.close()
         return 0
 
     if not changes and not refreshes:
-        print(f"changed=0 nfo_changed=0 refreshed=0 mode={mode}")
+        print(
+            "SUMMARY|chinese_metadata|"
+            f"items_scanned={stats['items_scanned']}|strm_checked={stats['strm_checked']}|"
+            f"title_needed=0|title_success=0|title_failed=0|nfo_changed=0|nfo_failed={len(stats['nfo_failed'])}|"
+            f"refresh_needed=0|refresh_success=0|refresh_failed=0|mode={mode}"
+        )
+        for item_id, path, reason in stats["nfo_failed"]:
+            print(f"FAIL|nfo|item={item_id}|path={path}|reason={reason}")
+        print(f"changed=0 nfo_changed=0 refreshed=0 failed={len(stats['nfo_failed'])} mode={mode}")
         con.close()
         return 0
 
@@ -228,37 +262,61 @@ def main() -> int:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         backup = BACKUP_DIR / f"library-before-title-fix-{datetime.now():%Y%m%d-%H%M%S}.db"
         shutil.copy2(DB, backup)
+    title_success = 0
+    title_failures: list[tuple[int, str, str]] = []
     for item_id, old_name, title, path in changes:
-        cur.execute(
-            "update MediaItems set Name=?, SortName=? where Id=?",
-            (title, title, item_id),
-        )
         try:
-            cur.execute("update fts_search9 set Name=? where rowid=?", (title, item_id))
-        except sqlite3.DatabaseError:
-            pass
+            cur.execute(
+                "update MediaItems set Name=?, SortName=? where Id=?",
+                (title, title, item_id),
+            )
+            try:
+                cur.execute("update fts_search9 set Name=? where rowid=?", (title, item_id))
+            except sqlite3.DatabaseError:
+                pass
+            title_success += 1
+            print(f"TITLE_OK|{item_id}|{old_name}|{title}|{path}")
+        except sqlite3.DatabaseError as exc:
+            title_failures.append((item_id, path, repr(exc)))
+            print(f"TITLE_FAIL|{item_id}|{old_name}|{title}|{path}|{exc}")
     con.commit()
     con.execute("pragma wal_checkpoint(TRUNCATE)")
     con.close()
 
     token = "" if os.environ.get("FIX_SKIP_REFRESH") == "1" else emby_token()
     refreshed = 0
+    refresh_failures: list[tuple[int, str, str]] = []
     if token:
         for item_id, old_name, title, path in refreshes:
             try:
                 if refresh_item(item_id, token, full=(mode == "full")):
                     refreshed += 1
-                    print(f"REFRESH|{item_id}|{title}|{path}")
+                    print(f"REFRESH_OK|{item_id}|{title}|{path}")
+                else:
+                    refresh_failures.append((item_id, path, "http_not_2xx"))
             except Exception as exc:
-                print(f"ERR_REFRESH|{item_id}|{title}|{path}|{exc}")
+                refresh_failures.append((item_id, path, repr(exc)))
+                print(f"REFRESH_FAIL|{item_id}|{title}|{path}|{exc}")
     elif refreshes:
         print("WARN|no_emby_token_skip_refresh")
+        refresh_failures = [(item_id, path, "missing_token") for item_id, _old_name, _title, path in refreshes]
 
     if backup:
         print(f"backup={backup}")
-    print(f"changed={len(changes)} nfo_changed={nfo_changes} refreshed={refreshed} mode={mode}")
-    for item_id, old_name, title, path in changes:
-        print(f"FIX|{item_id}|{old_name}|{title}|{path}")
+    print(
+        "SUMMARY|chinese_metadata|"
+        f"items_scanned={stats['items_scanned']}|strm_checked={stats['strm_checked']}|"
+        f"title_needed={len(changes)}|title_success={title_success}|title_failed={len(title_failures)}|"
+        f"nfo_changed={nfo_changes}|nfo_failed={len(stats['nfo_failed'])}|"
+        f"refresh_needed={len(refreshes)}|refresh_success={refreshed}|refresh_failed={len(refresh_failures)}|mode={mode}"
+    )
+    for item_id, path, reason in stats["nfo_failed"]:
+        print(f"FAIL|nfo|item={item_id}|path={path}|reason={reason}")
+    for item_id, path, reason in title_failures:
+        print(f"FAIL|title|item={item_id}|path={path}|reason={reason}")
+    for item_id, path, reason in refresh_failures:
+        print(f"FAIL|refresh|item={item_id}|path={path}|reason={reason}")
+    print(f"changed={title_success} nfo_changed={nfo_changes} refreshed={refreshed} failed={len(stats['nfo_failed']) + len(title_failures) + len(refresh_failures)} mode={mode}")
     return 0
 
 

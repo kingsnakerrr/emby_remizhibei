@@ -76,6 +76,16 @@ sudo ./scripts/fix-emby-strm-chinese-titles.sh dry-run
 看到 `WOULD_FIX` 表示标题会被修复；看到 `WOULD_REFRESH` 表示会请求 Emby 重新刮削
 中文简介或缺失元数据。预览不会改文件、不会停 Emby。
 
+每次运行都会在日志末尾输出汇总，例如：
+
+```text
+SUMMARY|chinese_metadata|items_scanned=3200|strm_checked=1200|title_needed=2|title_success=2|title_failed=0|nfo_changed=2|nfo_failed=0|refresh_needed=48|refresh_success=48|refresh_failed=0|mode=missing
+changed=2 nfo_changed=2 refreshed=48 failed=0 mode=missing
+```
+
+如果有失败，会输出 `FAIL|nfo|...`、`FAIL|title|...` 或 `FAIL|refresh|...`，后面会列出
+具体项目 ID、路径和原因。
+
 ## 执行修复
 
 ```bash

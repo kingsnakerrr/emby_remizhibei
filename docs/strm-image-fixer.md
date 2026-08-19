@@ -71,12 +71,16 @@ journalctl -u emby-fix-strm-images.service -n 100 --no-pager
 看到类似下面内容表示补齐成功：
 
 ```text
-COPY|/home/symedia_gd/movies/.../poster.jpg|/home/symedia_gd/movies/.../电影名 - 2160p...-poster.jpg
-REFRESH|12345|/home/symedia_gd/movies/.../电影名.strm
-changed=12 refreshed=3 mode=missing
+RUN|image_metadata|mode=missing|roots=/home/symedia_gd/movies,/home/symedia_rclone_zero/movies
+COPY_OK|/home/symedia_gd/movies/.../poster.jpg|/home/symedia_gd/movies/.../电影名 - 2160p...-poster.jpg
+REFRESH_OK|12345|/home/symedia_gd/movies/.../电影名.strm
+SUMMARY|image_metadata|roots=2|folders_scanned=1200|strm_folders=1000|copy_needed=12|copy_success=12|copy_missing_source=0|copy_failed=0|refresh_checked=1000|refresh_needed=3|refresh_success=3|refresh_failed=0|mode=missing
+changed=12 refreshed=3 missing_source=0 failed=0 mode=missing
 ```
 
 如果输出 `changed=0 refreshed=0`，说明当前没有缺少同名图片或需要 Emby 刷新的项目。
+如果没有可复制的源图，会输出 `MISSING_SOURCE|copy|...`；如果有真正失败，会输出
+`FAIL|copy|...` 或 `FAIL|refresh|...`，后面会列出具体路径和原因。
 
 ## 让 Emby 立即显示
 

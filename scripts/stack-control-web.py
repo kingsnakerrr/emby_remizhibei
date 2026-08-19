@@ -911,7 +911,7 @@ def save_config():
 
 
 def show_log(target: str, mode: str):
-    command = ["journalctl", "-u", target, "-n", "180", "--no-pager"] if mode == "journal" else ["docker", "logs", "--tail", "180", target]
+    command = ["journalctl", "-u", target, "-n", "500", "--no-pager"] if mode == "journal" else ["docker", "logs", "--tail", "500", target]
     result = run(command, timeout=30)
     text = (result.stdout + result.stderr).strip() or "没有日志。"
     return page("日志", """<div class="card wide"><h2>{{ target }}</h2><p><a class="btn" href="{{ url_for('dashboard') }}">返回</a></p><pre>{{ text }}</pre></div>""", target=target, text=text)
