@@ -550,6 +550,16 @@ def fixer_settings(libs: list[str]) -> dict:
     return data
 
 
+def fixer_runtime(service: str) -> dict[str, str]:
+    status = unit_status(service)
+    active = status.get("active", "unknown")
+    if active in {"active", "activating"}:
+        return {"state": "运行中", "class": "on", "active": active}
+    if active in {"inactive", "deactivating"}:
+        return {"state": "空闲", "class": "unknown", "active": active}
+    return {"state": active, "class": "off", "active": active}
+
+
 def web_apps() -> list[dict[str, str]]:
     stack = parse_kv_file(CREDS_FILE)
     rclone_settings = read_json(Path("/root/docker-compose/rclone-sync/settings.json"), {})
@@ -657,7 +667,7 @@ def dashboard():
       <div class="subgrid">
         <div class="subcard">
           <h3>图片和元素补齐监控</h3>
-          <div class="statusline"><span>运行状态</span><span class="pill {{ 'on' if image_timer.active == 'active' else 'off' }}">{{ image_timer.active }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
+          <div class="statusline"><span>运行状态</span><span class="pill {{ image_runtime.class }}">{{ image_runtime.state }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
           <p><label><input type="checkbox" name="image_enabled" {% if fixers.image_enabled %}checked{% endif %}> 启动定时轮询</label></p>
           <p><label>运行间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
@@ -666,7 +676,7 @@ def dashboard():
         </div>
         <div class="subcard">
           <h3>中文标题、简介等修正监控</h3>
-          <div class="statusline"><span>运行状态</span><span class="pill {{ 'on' if title_timer.active == 'active' else 'off' }}">{{ title_timer.active }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
+          <div class="statusline"><span>运行状态</span><span class="pill {{ title_runtime.class }}">{{ title_runtime.state }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
           <p><label><input type="checkbox" name="title_enabled" {% if fixers.title_enabled %}checked{% endif %}> 启动定时轮询</label></p>
           <p><label>运行间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
@@ -679,7 +689,7 @@ def dashboard():
     </form>
   </section>
 </div>
-""", units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_timer=unit_status("emby-fix-strm-images.timer"), title_timer=unit_status("emby-fix-strm-titles.timer"), prewarm=read_prewarm_env(), configs={key: editable_config(key) for key in CONFIG_EDITORS}, mb=mb, csrf=csrf_token())
+""", units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_runtime=fixer_runtime("emby-fix-strm-images.service"), title_runtime=fixer_runtime("emby-fix-strm-titles.service"), prewarm=read_prewarm_env(), configs={key: editable_config(key) for key in CONFIG_EDITORS}, mb=mb, csrf=csrf_token())
 
 
 @app.route("/unit", methods=["POST"])
