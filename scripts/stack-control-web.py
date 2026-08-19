@@ -159,7 +159,7 @@ table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px s
 .pill{display:inline-block;border-radius:999px;padding:2px 8px;font-weight:700;font-size:12px}.on{background:#143d2a;color:#7ee787}.off{background:#3d1f1c;color:#ff938a}.unknown{background:#3b3219;color:#e3b341}
 button,.btn{border:0;border-radius:6px;padding:7px 10px;margin:2px;background:var(--blue);color:white;font-weight:700;cursor:pointer;text-decoration:none;display:inline-block}.danger{background:var(--red)}.okbtn{background:var(--green)}.warn{background:var(--yellow);color:#111}
 input{padding:8px;background:#0d1117;color:var(--text);border:1px solid var(--line);border-radius:6px}input[type=number]{width:92px}.row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.muted{color:var(--muted)}.flash{background:#1f2a44;border:1px solid #315a9d;border-radius:8px;padding:10px;margin-bottom:12px}
-pre{white-space:pre-wrap;background:#010409;border:1px solid var(--line);border-radius:8px;padding:12px;max-height:52vh;overflow:auto;font:12px/1.55 Consolas,monospace}.logbox{height:64vh;max-height:64vh}.summarybox{max-height:180px;margin-bottom:12px}.secret{font-family:Consolas,monospace;word-break:break-all}.checks{columns:2;column-gap:24px}.checks label{display:block;margin:6px 0;break-inside:avoid}
+pre{white-space:pre-wrap;background:#010409;border:1px solid var(--line);border-radius:8px;padding:12px;max-height:52vh;overflow:auto;font:12px/1.55 Consolas,monospace}.logbox{height:72vh;max-height:72vh}.secret{font-family:Consolas,monospace;word-break:break-all}.checks{columns:2;column-gap:24px}.checks label{display:block;margin:6px 0;break-inside:avoid}
 .split{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr);gap:14px}.taskbox{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}.taskbox:first-child{border-top:0;margin-top:0;padding-top:0}.inline{display:inline}.field{width:100%}.tiny{width:82px!important}
 .subgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px}.subcard{background:#0f141b;border:1px solid var(--line);border-radius:8px;padding:14px}.subcard .checks{columns:1}.statusline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 12px}.compact-form{display:flex;align-items:end;gap:14px;flex-wrap:wrap}.compact-form label{min-width:92px}.compact-form p{margin:0}.editor{width:100%;min-height:260px;background:#010409;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px;font:12px/1.45 Consolas,monospace}.help-list{margin:8px 0 14px;padding-left:18px}.help-list li{margin:4px 0}
 @media(max-width:760px){.row{grid-template-columns:1fr}.checks{columns:1}table{font-size:12px}th,td{padding:8px 5px}}
@@ -719,7 +719,6 @@ def dashboard():
         <div class="subcard">
           <h3>图片和元素补齐监控</h3>
           <div class="statusline"><span>运行状态</span><span id="image-runtime" class="pill {{ image_runtime.class }}">{{ image_runtime.state }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
-          <p id="image-summary" class="muted">{{ image_summary }}</p>
           <p><label><input type="checkbox" name="image_enabled" {% if fixers.image_enabled %}checked{% endif %}> 启动定时轮询</label></p>
           <p><label>运行间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
@@ -729,7 +728,6 @@ def dashboard():
         <div class="subcard">
           <h3>中文标题、简介等修正监控</h3>
           <div class="statusline"><span>运行状态</span><span id="title-runtime" class="pill {{ title_runtime.class }}">{{ title_runtime.state }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
-          <p id="title-summary" class="muted">{{ title_summary }}</p>
           <p><label><input type="checkbox" name="title_enabled" {% if fixers.title_enabled %}checked{% endif %}> 启动定时轮询</label></p>
           <p><label>运行间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
@@ -747,12 +745,10 @@ def dashboard():
         const data = await response.json();
         for (const key of ["image", "title"]) {
           const runtime = document.getElementById(key + "-runtime");
-          const summary = document.getElementById(key + "-summary");
           if (runtime && data[key]) {
             runtime.textContent = data[key].state;
             runtime.className = "pill " + data[key].class;
           }
-          if (summary && data[key]) summary.textContent = data[key].summary;
         }
       } catch (error) {}
     }
@@ -760,7 +756,7 @@ def dashboard():
     </script>
   </section>
 </div>
-""", units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_runtime=fixer_runtime("emby-fix-strm-images.service", "emby-fix-strm-images-full.service"), title_runtime=fixer_runtime("emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service"), image_summary=format_fixer_summary("image", "emby-fix-strm-images.service", "emby-fix-strm-images-full.service"), title_summary=format_fixer_summary("title", "emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service"), prewarm=read_prewarm_env(), configs={key: editable_config(key) for key in CONFIG_EDITORS}, mb=mb, csrf=csrf_token())
+""", units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_runtime=fixer_runtime("emby-fix-strm-images.service", "emby-fix-strm-images-full.service"), title_runtime=fixer_runtime("emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service"), prewarm=read_prewarm_env(), configs={key: editable_config(key) for key in CONFIG_EDITORS}, mb=mb, csrf=csrf_token())
 
 
 @app.route("/unit", methods=["POST"])
@@ -1024,13 +1020,31 @@ def log_summary(text: str) -> str:
     return "\n".join(lines) if lines else "还没有捕获到本次任务总结。"
 
 
-def show_log(target: str, mode: str):
+def strm_log_summary(target: str) -> str:
+    if target == "emby-fix-strm-images.service":
+        return format_fixer_summary("image", "emby-fix-strm-images.service", "emby-fix-strm-images-full.service")
+    if target == "emby-fix-strm-images-full.service":
+        return format_fixer_summary("image", "emby-fix-strm-images-full.service", "emby-fix-strm-images.service")
+    if target == "emby-fix-strm-titles.service":
+        return format_fixer_summary("title", "emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service")
+    if target == "emby-fix-strm-titles-full.service":
+        return format_fixer_summary("title", "emby-fix-strm-titles-full.service", "emby-fix-strm-titles.service")
+    return ""
+
+
+def display_log_text(target: str, mode: str) -> str:
     text = read_log_text(target, mode)
-    summary = log_summary(text)
-    return page("日志", """<div class="card wide"><h2>{{ target }}</h2><p><a class="btn" href="{{ url_for('dashboard', _anchor='strm-monitor') }}">返回</a> <span id="follow-state" class="muted">最新日志在最上面，停在顶部时自动刷新。</span></p><h3>最近总结</h3><pre id="log-summary" class="summarybox">{{ summary }}</pre><h3>实时日志</h3><pre id="live-log" class="logbox">{{ text }}</pre></div>
+    summary = strm_log_summary(target) if mode == "journal" else ""
+    if summary:
+        return f"===== 最近一次运行情况 =====\n{summary}\n\n===== 实时日志，最新在最上面 =====\n{text}"
+    return text
+
+
+def show_log(target: str, mode: str):
+    text = display_log_text(target, mode)
+    return page("日志", """<div class="card wide"><h2>{{ target }}</h2><p><a class="btn" href="{{ url_for('dashboard', _anchor='strm-monitor') }}">返回</a> <span id="follow-state" class="muted">最新日志在最上面，停在顶部时自动刷新。</span></p><h3>实时日志</h3><pre id="live-log" class="logbox">{{ text }}</pre></div>
 <script>
 const logBox = document.getElementById("live-log");
-const summaryBox = document.getElementById("log-summary");
 const state = document.getElementById("follow-state");
 const params = new URLSearchParams({target: {{ target|tojson }}, mode: {{ mode|tojson }}});
 async function refreshLog(){
@@ -1042,7 +1056,6 @@ async function refreshLog(){
     const response = await fetch("{{ url_for('log_data') }}?" + params.toString(), {cache: "no-store"});
     const data = await response.json();
     logBox.textContent = data.text || "没有日志。";
-    summaryBox.textContent = data.summary || "还没有捕获到本次任务总结。";
     logBox.scrollTop = 0;
     if (state) state.textContent = data.active ? ("最新日志在最上面，当前状态：" + data.active) : "最新日志在最上面，停在顶部时自动刷新。";
   } catch (error) {
@@ -1053,7 +1066,7 @@ logBox.addEventListener("scroll", () => {
   if (state) state.textContent = logBox.scrollTop > 8 ? "已暂停自动跟随，拖回最上面会继续刷新。" : "最新日志在最上面，停在顶部时自动刷新。";
 });
 setInterval(refreshLog, 3000);
-</script>""", target=target, mode=mode, text=text, summary=summary)
+</script>""", target=target, mode=mode, text=text)
 
 
 @app.route("/log-data")
@@ -1062,9 +1075,9 @@ def log_data():
         return jsonify(error="unauthorized"), 401
     target = request.args.get("target", "")
     mode = request.args.get("mode", "")
-    text = read_log_text(target, mode)
+    text = display_log_text(target, mode)
     active = unit_status(target).get("active", "") if mode == "journal" else container_status(target).get("status", "")
-    return jsonify(text=text, summary=log_summary(text), active=active)
+    return jsonify(text=text, active=active)
 
 
 @app.route("/fixers", methods=["POST"])
@@ -1106,11 +1119,9 @@ def fixer_status():
     return jsonify(
         image={
             **fixer_runtime("emby-fix-strm-images.service", "emby-fix-strm-images-full.service"),
-            "summary": format_fixer_summary("image", "emby-fix-strm-images.service", "emby-fix-strm-images-full.service"),
         },
         title={
             **fixer_runtime("emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service"),
-            "summary": format_fixer_summary("title", "emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service"),
         },
     )
 
@@ -1131,13 +1142,20 @@ def run_fixer_once():
             "image-full": ["systemd-run", "--unit", "emby-fix-strm-images-full", "--collect", "--property=Type=oneshot", "--setenv=FIX_REFRESH_MODE=full", "/usr/bin/python3", "/root/docker-compose/emby-tools/fix-strm-images.py"],
             "title-full": ["systemd-run", "--unit", "emby-fix-strm-titles-full", "--collect", "--property=Type=oneshot", "/bin/bash", "-lc", "FIX_REFRESH_MODE=full /root/docker-compose/emby-tools/fix-emby-strm-chinese-titles.sh apply"],
         }
+        log_targets = {
+            "image": "emby-fix-strm-images.service",
+            "title": "emby-fix-strm-titles.service",
+            "image-full": "emby-fix-strm-images-full.service",
+            "title-full": "emby-fix-strm-titles-full.service",
+        }
         command = commands.get(kind)
         if not command:
             raise ValueError("未知 STRM 任务。")
         result = run(command, timeout=120)
         if result.returncode != 0:
             raise ValueError(result.stderr.strip() or result.stdout.strip() or "运行失败。")
-        flash("已触发后台运行，刷新本区块可看运行状态；完成结果看日志按钮。")
+        flash("已触发后台运行，实时日志会自动刷新。")
+        return show_log(log_targets[kind], "journal")
     except (ValueError, subprocess.TimeoutExpired) as error:
         flash(str(error))
     return redirect(url_for("dashboard", _anchor="strm-monitor"))
