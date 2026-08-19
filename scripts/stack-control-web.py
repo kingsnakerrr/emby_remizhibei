@@ -662,7 +662,7 @@ def dashboard():
           <p><label>运行间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
           <div class="checks">{% for lib in libs %}<label><input type="checkbox" name="image_roots" value="{{ lib }}" {% if lib in fixers.image_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
-          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image" class="warn" type="submit">只检查缺失/未扫过</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局刷新会让勾选媒体库全部重新请求 Emby 刮削，确定执行？')">全局媒体库扫描</button></p>
+          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image" class="warn" type="submit">补齐缺失和未扫描</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局扫描补齐会让勾选媒体库全部重新请求 Emby 刮削，确定执行？')">全局扫描补齐</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="image-log" type="submit">日志</button></p>
         </div>
         <div class="subcard">
           <h3>中文标题、简介等修正监控</h3>
@@ -671,7 +671,7 @@ def dashboard():
           <p><label>运行间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
           <div class="checks">{% for lib in libs %}<label><input type="checkbox" name="title_roots" value="{{ lib }}" {% if lib in fixers.title_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
-          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title" class="warn" type="submit">只检查缺失/未扫过</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局刷新会让勾选媒体库全部重新请求中文元数据，确定执行？')">全局媒体库扫描</button></p>
+          <p><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title" class="warn" type="submit">补齐缺失和未扫描</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局扫描补齐会让勾选媒体库全部重新请求中文元数据，确定执行？')">全局扫描补齐</button><button formaction="{{ url_for('run_fixer_once') }}" name="kind" value="title-log" type="submit">日志</button></p>
         </div>
       </div>
       {% if not libs %}<p class="muted">还没从 Emby 数据库发现 /home 下的 STRM 媒体库。</p>{% endif %}
@@ -955,6 +955,10 @@ def run_fixer_once():
         require_csrf()
         save_fixer_config_from_form()
         kind = request.form.get("kind", "")
+        if kind == "image-log":
+            return show_log("emby-fix-strm-images.service", "journal")
+        if kind == "title-log":
+            return show_log("emby-fix-strm-titles.service", "journal")
         commands = {
             "image": ["systemctl", "start", "emby-fix-strm-images.service"],
             "title": ["systemctl", "start", "emby-fix-strm-titles.service"],
