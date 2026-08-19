@@ -316,6 +316,7 @@ def main() -> int:
             if not folder.is_dir():
                 continue
             folders_scanned += 1
+            print(f"SCAN_FOLDER|{folders_scanned}|{folder}")
             try:
                 changes, failures, missing_sources = fix_folder(folder)
             except Exception as exc:
@@ -357,6 +358,13 @@ def main() -> int:
         for item_id, path, reason in refresh_failures:
             print(f"FAIL|refresh|item={item_id}|path={path}|reason={reason}")
     print(f"changed={copy_success} refreshed={refresh_success} missing_source={len(copy_missing_sources)} failed={len(copy_failures) + len(refresh_failures)} mode={mode}")
+    print(
+        "RESULT|image_metadata|"
+        f"mode={mode}|roots={len(roots)}|folders_scanned={folders_scanned}|strm_folders={strm_folders}|"
+        f"copy_needed={copy_needed}|copy_success={copy_success}|copy_missing_source={len(copy_missing_sources)}|copy_failed={len(copy_failures)}|"
+        f"refresh_checked={refresh_checked}|refresh_needed={refresh_needed}|refresh_success={refresh_success}|refresh_failed={len(refresh_failures)}|"
+        f"duration_seconds={duration:.1f}"
+    )
     return 0
 
 
@@ -373,6 +381,7 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 ${SCRIPT}
 EOF
 

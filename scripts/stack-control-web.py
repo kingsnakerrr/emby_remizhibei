@@ -1002,11 +1002,10 @@ def read_log_text(target: str, mode: str) -> str:
     if not allowed_log_target(target, mode):
         return "不允许查看这个日志目标。"
     if mode == "journal":
-        result = run(["journalctl", "-u", target, "-n", "500", "-r", "--no-pager"], timeout=30)
+        result = run(["journalctl", "-u", target, "-n", "500", "--no-pager"], timeout=30)
         return (result.stdout + result.stderr).strip() or "没有日志。"
     result = run(["docker", "logs", "--tail", "500", target], timeout=30)
-    lines = (result.stdout + result.stderr).splitlines()
-    return "\n".join(reversed(lines)).strip() or "没有日志。"
+    return (result.stdout + result.stderr).strip() or "没有日志。"
 
 
 def log_summary(text: str) -> str:
@@ -1020,51 +1019,42 @@ def log_summary(text: str) -> str:
     return "\n".join(lines) if lines else "还没有捕获到本次任务总结。"
 
 
-def strm_log_summary(target: str) -> str:
-    if target == "emby-fix-strm-images.service":
-        return format_fixer_summary("image", "emby-fix-strm-images.service", "emby-fix-strm-images-full.service")
-    if target == "emby-fix-strm-images-full.service":
-        return format_fixer_summary("image", "emby-fix-strm-images-full.service", "emby-fix-strm-images.service")
-    if target == "emby-fix-strm-titles.service":
-        return format_fixer_summary("title", "emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service")
-    if target == "emby-fix-strm-titles-full.service":
-        return format_fixer_summary("title", "emby-fix-strm-titles-full.service", "emby-fix-strm-titles.service")
-    return ""
-
-
 def display_log_text(target: str, mode: str) -> str:
-    text = read_log_text(target, mode)
-    summary = strm_log_summary(target) if mode == "journal" else ""
-    if summary:
-        return f"===== 最近一次运行情况 =====\n{summary}\n\n===== 实时日志，最新在最上面 =====\n{text}"
-    return text
+    return read_log_text(target, mode)
 
 
 def show_log(target: str, mode: str):
     text = display_log_text(target, mode)
-    return page("日志", """<div class="card wide"><h2>{{ target }}</h2><p><a class="btn" href="{{ url_for('dashboard', _anchor='strm-monitor') }}">返回</a> <span id="follow-state" class="muted">最新日志在最上面，停在顶部时自动刷新。</span></p><h3>实时日志</h3><pre id="live-log" class="logbox">{{ text }}</pre></div>
+    return page("日志", """<div class="card wide"><h2>{{ target }}</h2><p><a class="btn" href="{{ url_for('dashboard', _anchor='strm-monitor') }}">返回</a> <span id="follow-state" class="muted">实时日志从上往下追加，停在底部时自动刷新。</span></p><h3>实时日志</h3><pre id="live-log" class="logbox">{{ text }}</pre></div>
 <script>
 const logBox = document.getElementById("live-log");
 const state = document.getElementById("follow-state");
 const params = new URLSearchParams({target: {{ target|tojson }}, mode: {{ mode|tojson }}});
+function isAtBottom(){
+  return !logBox || (logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight) < 24;
+}
+function followBottom(){
+  if (logBox) logBox.scrollTop = logBox.scrollHeight;
+}
 async function refreshLog(){
-  if (!logBox || logBox.scrollTop > 8) {
-    if (state) state.textContent = "已暂停自动跟随，拖回最上面会继续刷新。";
+  if (!isAtBottom()) {
+    if (state) state.textContent = "已暂停自动跟随，拖到底部会继续刷新。";
     return;
   }
   try {
     const response = await fetch("{{ url_for('log_data') }}?" + params.toString(), {cache: "no-store"});
     const data = await response.json();
     logBox.textContent = data.text || "没有日志。";
-    logBox.scrollTop = 0;
-    if (state) state.textContent = data.active ? ("最新日志在最上面，当前状态：" + data.active) : "最新日志在最上面，停在顶部时自动刷新。";
+    followBottom();
+    if (state) state.textContent = data.active ? ("实时日志从上往下追加，当前状态：" + data.active) : "实时日志从上往下追加，停在底部时自动刷新。";
   } catch (error) {
     if (state) state.textContent = "日志刷新失败，稍后会自动重试。";
   }
 }
 logBox.addEventListener("scroll", () => {
-  if (state) state.textContent = logBox.scrollTop > 8 ? "已暂停自动跟随，拖回最上面会继续刷新。" : "最新日志在最上面，停在顶部时自动刷新。";
+  if (state) state.textContent = isAtBottom() ? "实时日志从上往下追加，停在底部时自动刷新。" : "已暂停自动跟随，拖到底部会继续刷新。";
 });
+followBottom();
 setInterval(refreshLog, 3000);
 </script>""", target=target, mode=mode, text=text)
 
@@ -1139,8 +1129,8 @@ def run_fixer_once():
         commands = {
             "image": ["systemctl", "start", "--no-block", "emby-fix-strm-images.service"],
             "title": ["systemctl", "start", "--no-block", "emby-fix-strm-titles.service"],
-            "image-full": ["systemd-run", "--unit", "emby-fix-strm-images-full", "--collect", "--property=Type=oneshot", "--setenv=FIX_REFRESH_MODE=full", "/usr/bin/python3", "/root/docker-compose/emby-tools/fix-strm-images.py"],
-            "title-full": ["systemd-run", "--unit", "emby-fix-strm-titles-full", "--collect", "--property=Type=oneshot", "/bin/bash", "-lc", "FIX_REFRESH_MODE=full /root/docker-compose/emby-tools/fix-emby-strm-chinese-titles.sh apply"],
+            "image-full": ["systemd-run", "--unit", "emby-fix-strm-images-full", "--collect", "--property=Type=oneshot", "--setenv=PYTHONUNBUFFERED=1", "--setenv=FIX_REFRESH_MODE=full", "/usr/bin/python3", "/root/docker-compose/emby-tools/fix-strm-images.py"],
+            "title-full": ["systemd-run", "--unit", "emby-fix-strm-titles-full", "--collect", "--property=Type=oneshot", "--setenv=PYTHONUNBUFFERED=1", "/bin/bash", "-lc", "FIX_REFRESH_MODE=full /root/docker-compose/emby-tools/fix-emby-strm-chinese-titles.sh apply"],
         }
         log_targets = {
             "image": "emby-fix-strm-images.service",

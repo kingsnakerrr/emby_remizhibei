@@ -216,6 +216,7 @@ def find_changes(cur: sqlite3.Cursor, dry_run: bool) -> tuple[list[tuple[int, st
     stats = {"items_scanned": 0, "strm_checked": 0, "title_needed": 0, "overview_refresh_needed": 0, "nfo_failed": []}
     for item_id, name, sort_name, original_title, path, overview, date_last_refreshed in cur.fetchall():
         stats["items_scanned"] += 1
+        print(f"CHECK_ITEM|{stats['items_scanned']}|{item_id}|{path}")
         if not path or not path.endswith(".strm"):
             continue
         stats["strm_checked"] += 1
@@ -280,6 +281,12 @@ def main() -> int:
         for item_id, path, reason in stats["nfo_failed"]:
             print(f"FAIL|nfo|item={item_id}|path={path}|reason={reason}")
         print(f"changed=0 nfo_changed=0 refreshed=0 failed={len(stats['nfo_failed'])} mode={mode}")
+        print(
+            "RESULT|chinese_metadata|"
+            f"mode={mode}|items_scanned={stats['items_scanned']}|strm_checked={stats['strm_checked']}|"
+            f"title_needed=0|title_success=0|title_failed=0|nfo_changed=0|nfo_failed={len(stats['nfo_failed'])}|"
+            f"refresh_needed=0|refresh_success=0|refresh_failed=0|duration_seconds={duration:.1f}"
+        )
         con.close()
         return 0
 
@@ -344,6 +351,13 @@ def main() -> int:
     for item_id, path, reason in refresh_failures:
         print(f"FAIL|refresh|item={item_id}|path={path}|reason={reason}")
     print(f"changed={title_success} nfo_changed={nfo_changes} refreshed={refreshed} failed={len(stats['nfo_failed']) + len(title_failures) + len(refresh_failures)} mode={mode}")
+    print(
+        "RESULT|chinese_metadata|"
+        f"mode={mode}|items_scanned={stats['items_scanned']}|strm_checked={stats['strm_checked']}|"
+        f"title_needed={len(changes)}|title_success={title_success}|title_failed={len(title_failures)}|"
+        f"nfo_changed={nfo_changes}|nfo_failed={len(stats['nfo_failed'])}|"
+        f"refresh_needed={len(refreshes)}|refresh_success={refreshed}|refresh_failed={len(refresh_failures)}|duration_seconds={duration:.1f}"
+    )
     return 0
 
 
@@ -411,6 +425,7 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
+Environment=PYTHONUNBUFFERED=1
 ExecStart=${INSTALLER} apply
 EOF
 
