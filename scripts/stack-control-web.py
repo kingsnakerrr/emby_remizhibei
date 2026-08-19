@@ -560,6 +560,57 @@ def fixer_runtime(*services: str) -> dict[str, str]:
     return {"state": ",".join(states), "class": "off", "active": ",".join(states)}
 
 
+def latest_journal_summary(*units: str) -> dict[str, str]:
+    command = ["journalctl"]
+    for unit in units:
+        command.extend(["-u", unit])
+    command.extend(["-n", "500", "-r", "-o", "cat", "--no-pager"])
+    result = run(command, timeout=20)
+    text = result.stdout + result.stderr
+    for line in text.splitlines():
+        if "SUMMARY|" not in line:
+            continue
+        parts = line.split("|")
+        data = {"raw": line.strip(), "kind": parts[1] if len(parts) > 1 else ""}
+        for part in parts[2:]:
+            if "=" in part:
+                key, value = part.split("=", 1)
+                data[key] = value
+        return data
+    return {"raw": "还没有任务总结。"}
+
+
+def latest_unit_time(unit: str) -> str:
+    result = run(["systemctl", "show", unit, "-p", "ExecMainStartTimestamp", "-p", "ExecMainExitTimestamp", "--value"], timeout=10)
+    values = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return " / ".join(values[-2:]) if values else "无"
+
+
+def format_fixer_summary(kind: str, *units: str) -> str:
+    data = latest_journal_summary(*units)
+    if not data or data.get("raw") == "还没有任务总结。":
+        return "最近结果：还没有任务总结。"
+    mode = "全局扫描补齐" if data.get("mode") == "full" else "补齐缺失和未扫描"
+    duration = data.get("duration_seconds", "-")
+    if kind == "image":
+        return (
+            f"最近结果：{mode}；扫描文件夹 {data.get('folders_scanned','0')} 个，"
+            f"STRM 文件夹 {data.get('strm_folders','0')} 个，需要补齐 {data.get('copy_needed','0')} 项，"
+            f"成功复制 {data.get('copy_success','0')} 项，缺少源图 {data.get('copy_missing_source','0')} 项，"
+            f"复制失败 {data.get('copy_failed','0')} 项；Emby 检查 {data.get('refresh_checked','0')} 项，"
+            f"需要刷新 {data.get('refresh_needed','0')} 项，成功刷新 {data.get('refresh_success','0')} 项，"
+            f"刷新失败 {data.get('refresh_failed','0')} 项；耗时 {duration} 秒；时间 {latest_unit_time(units[0]) if units else '无'}。"
+        )
+    return (
+        f"最近结果：{mode}；扫描项目 {data.get('items_scanned','0')} 个，"
+        f"STRM 项目 {data.get('strm_checked','0')} 个，需要改中文标题 {data.get('title_needed','0')} 个，"
+        f"成功改标题 {data.get('title_success','0')} 个，标题失败 {data.get('title_failed','0')} 个，"
+        f"NFO 修改 {data.get('nfo_changed','0')} 个，NFO 失败 {data.get('nfo_failed','0')} 个，"
+        f"需要刷新简介/元数据 {data.get('refresh_needed','0')} 个，成功刷新 {data.get('refresh_success','0')} 个，"
+        f"刷新失败 {data.get('refresh_failed','0')} 个；耗时 {duration} 秒；时间 {latest_unit_time(units[0]) if units else '无'}。"
+    )
+
+
 def web_apps() -> list[dict[str, str]]:
     stack = parse_kv_file(CREDS_FILE)
     rclone_settings = read_json(Path("/root/docker-compose/rclone-sync/settings.json"), {})
@@ -667,7 +718,8 @@ def dashboard():
       <div class="subgrid">
         <div class="subcard">
           <h3>图片和元素补齐监控</h3>
-          <div class="statusline"><span>运行状态</span><span class="pill {{ image_runtime.class }}">{{ image_runtime.state }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
+          <div class="statusline"><span>运行状态</span><span id="image-runtime" class="pill {{ image_runtime.class }}">{{ image_runtime.state }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
+          <p id="image-summary" class="muted">{{ image_summary }}</p>
           <p><label><input type="checkbox" name="image_enabled" {% if fixers.image_enabled %}checked{% endif %}> 启动定时轮询</label></p>
           <p><label>运行间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
@@ -676,7 +728,8 @@ def dashboard():
         </div>
         <div class="subcard">
           <h3>中文标题、简介等修正监控</h3>
-          <div class="statusline"><span>运行状态</span><span class="pill {{ title_runtime.class }}">{{ title_runtime.state }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
+          <div class="statusline"><span>运行状态</span><span id="title-runtime" class="pill {{ title_runtime.class }}">{{ title_runtime.state }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
+          <p id="title-summary" class="muted">{{ title_summary }}</p>
           <p><label><input type="checkbox" name="title_enabled" {% if fixers.title_enabled %}checked{% endif %}> 启动定时轮询</label></p>
           <p><label>运行间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label></p>
           <h3>刷新媒体库</h3>
@@ -687,9 +740,27 @@ def dashboard():
       {% if not libs %}<p class="muted">还没从 Emby 数据库发现 /home 下的 STRM 媒体库。</p>{% endif %}
       <p><button type="submit">保存 STRM 监控设置</button></p>
     </form>
+    <script>
+    async function refreshFixerStatus(){
+      try {
+        const response = await fetch("{{ url_for('fixer_status') }}", {cache: "no-store"});
+        const data = await response.json();
+        for (const key of ["image", "title"]) {
+          const runtime = document.getElementById(key + "-runtime");
+          const summary = document.getElementById(key + "-summary");
+          if (runtime && data[key]) {
+            runtime.textContent = data[key].state;
+            runtime.className = "pill " + data[key].class;
+          }
+          if (summary && data[key]) summary.textContent = data[key].summary;
+        }
+      } catch (error) {}
+    }
+    setInterval(refreshFixerStatus, 3000);
+    </script>
   </section>
 </div>
-""", units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_runtime=fixer_runtime("emby-fix-strm-images.service", "emby-fix-strm-images-full.service"), title_runtime=fixer_runtime("emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service"), prewarm=read_prewarm_env(), configs={key: editable_config(key) for key in CONFIG_EDITORS}, mb=mb, csrf=csrf_token())
+""", units=units, mount_units=mount_units, mount_configs={name: rclone_mount_config(name) for name, _, _ in mount_units}, mount_defaults_json=json.dumps(RCLONE_MOUNT_DEFAULTS), mount_help=RCLONE_MOUNT_HELP, containers=containers, web_apps=web_apps(), tasks=tasks, remotes=remotes, libs=libs, fixers=fixers, image_runtime=fixer_runtime("emby-fix-strm-images.service", "emby-fix-strm-images-full.service"), title_runtime=fixer_runtime("emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service"), image_summary=format_fixer_summary("image", "emby-fix-strm-images.service", "emby-fix-strm-images-full.service"), title_summary=format_fixer_summary("title", "emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service"), prewarm=read_prewarm_env(), configs={key: editable_config(key) for key in CONFIG_EDITORS}, mb=mb, csrf=csrf_token())
 
 
 @app.route("/unit", methods=["POST"])
@@ -1026,6 +1097,22 @@ def save_fixer_config_from_form() -> dict:
     run(["systemctl", "restart", "emby-fix-strm-images.timer"] if image_enabled else ["systemctl", "stop", "emby-fix-strm-images.timer"])
     run(["systemctl", "restart", "emby-fix-strm-titles.timer"] if title_enabled else ["systemctl", "stop", "emby-fix-strm-titles.timer"])
     return data
+
+
+@app.route("/fixer-status")
+def fixer_status():
+    if not session.get("user"):
+        return jsonify(error="unauthorized"), 401
+    return jsonify(
+        image={
+            **fixer_runtime("emby-fix-strm-images.service", "emby-fix-strm-images-full.service"),
+            "summary": format_fixer_summary("image", "emby-fix-strm-images.service", "emby-fix-strm-images-full.service"),
+        },
+        title={
+            **fixer_runtime("emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service"),
+            "summary": format_fixer_summary("title", "emby-fix-strm-titles.service", "emby-fix-strm-titles-full.service"),
+        },
+    )
 
 
 @app.route("/fixers/run", methods=["POST"])

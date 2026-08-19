@@ -38,6 +38,7 @@ import json
 import re
 import shutil
 import sqlite3
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -240,6 +241,7 @@ def find_changes(cur: sqlite3.Cursor, dry_run: bool) -> tuple[list[tuple[int, st
 
 
 def main() -> int:
+    started = time.monotonic()
     dry_run = os.environ.get("DRY_RUN") == "1"
     if not DB.exists():
         raise SystemExit(f"missing db: {DB}")
@@ -250,11 +252,12 @@ def main() -> int:
     mode = MODE
 
     if dry_run:
+        duration = time.monotonic() - started
         print(
             "SUMMARY|chinese_metadata|dry_run=1|"
             f"items_scanned={stats['items_scanned']}|strm_checked={stats['strm_checked']}|"
             f"title_needed={len(changes)}|nfo_changed={nfo_changes}|nfo_failed={len(stats['nfo_failed'])}|"
-            f"refresh_needed={len(refreshes)}|mode={mode}"
+            f"refresh_needed={len(refreshes)}|duration_seconds={duration:.1f}|mode={mode}"
         )
         print(f"dry_run=1 changed={len(changes)} nfo_changed={nfo_changes} refresh={len(refreshes)} failed={len(stats['nfo_failed'])} mode={mode}")
         for item_id, old_name, title, path in changes:
@@ -267,11 +270,12 @@ def main() -> int:
         return 0
 
     if not changes and not refreshes:
+        duration = time.monotonic() - started
         print(
             "SUMMARY|chinese_metadata|"
             f"items_scanned={stats['items_scanned']}|strm_checked={stats['strm_checked']}|"
             f"title_needed=0|title_success=0|title_failed=0|nfo_changed=0|nfo_failed={len(stats['nfo_failed'])}|"
-            f"refresh_needed=0|refresh_success=0|refresh_failed=0|mode={mode}"
+            f"refresh_needed=0|refresh_success=0|refresh_failed=0|duration_seconds={duration:.1f}|mode={mode}"
         )
         for item_id, path, reason in stats["nfo_failed"]:
             print(f"FAIL|nfo|item={item_id}|path={path}|reason={reason}")
@@ -325,12 +329,13 @@ def main() -> int:
 
     if backup:
         print(f"backup={backup}")
+    duration = time.monotonic() - started
     print(
         "SUMMARY|chinese_metadata|"
         f"items_scanned={stats['items_scanned']}|strm_checked={stats['strm_checked']}|"
         f"title_needed={len(changes)}|title_success={title_success}|title_failed={len(title_failures)}|"
         f"nfo_changed={nfo_changes}|nfo_failed={len(stats['nfo_failed'])}|"
-        f"refresh_needed={len(refreshes)}|refresh_success={refreshed}|refresh_failed={len(refresh_failures)}|mode={mode}"
+        f"refresh_needed={len(refreshes)}|refresh_success={refreshed}|refresh_failed={len(refresh_failures)}|duration_seconds={duration:.1f}|mode={mode}"
     )
     for item_id, path, reason in stats["nfo_failed"]:
         print(f"FAIL|nfo|item={item_id}|path={path}|reason={reason}")

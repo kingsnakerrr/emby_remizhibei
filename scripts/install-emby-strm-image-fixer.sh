@@ -52,6 +52,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import time
 import urllib.parse
 import urllib.request
 
@@ -297,6 +298,7 @@ def refresh_emby_missing_or_full(full: bool) -> tuple[int, int, int, list[tuple[
 
 
 def main() -> int:
+    started = time.monotonic()
     roots = configured_roots()
     folders_scanned = 0
     strm_folders = 0
@@ -332,11 +334,13 @@ def main() -> int:
             copy_missing_sources.extend(missing_sources)
     mode = os.environ.get("FIX_REFRESH_MODE", "missing")
     refresh_checked, refresh_needed, refresh_success, refresh_failures = refresh_emby_missing_or_full(full=(mode == "full"))
+    duration = time.monotonic() - started
     print(
         "SUMMARY|image_metadata|"
         f"roots={len(roots)}|folders_scanned={folders_scanned}|strm_folders={strm_folders}|"
         f"copy_needed={copy_needed}|copy_success={copy_success}|copy_missing_source={len(copy_missing_sources)}|copy_failed={len(copy_failures)}|"
-        f"refresh_checked={refresh_checked}|refresh_needed={refresh_needed}|refresh_success={refresh_success}|refresh_failed={len(refresh_failures)}|mode={mode}"
+        f"refresh_checked={refresh_checked}|refresh_needed={refresh_needed}|refresh_success={refresh_success}|refresh_failed={len(refresh_failures)}|"
+        f"duration_seconds={duration:.1f}|mode={mode}"
     )
     if copy_missing_sources:
         print("MISSING_SOURCE|copy|showing_first=100")
