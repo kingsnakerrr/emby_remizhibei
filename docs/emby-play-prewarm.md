@@ -188,5 +188,5 @@ sudo systemctl restart emby-play-prewarm.service
 
 - 脚本不包含账号、密码、OAuth 或 Emby Token。
 - 运行时优先从 Emby 请求日志读取当前客户端 Token。
-- 如果日志 Token 含不可见字符，会回退读取本机 EmbyStream 测试配置中的 token；没有该配置时只跳过预热。
+- 如果日志 Token 含不可见字符，会自动清理后再使用；没有可用 Token 时只跳过预热。
 - 不修改 Emby 数据库、媒体库、Nginx 或 CloudDrive2 配置。

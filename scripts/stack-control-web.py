@@ -43,7 +43,6 @@ SYSTEMD_UNITS = {
     "emby-fix-strm-images.timer": {"label": "Emby 元素图片补齐", "log": "emby-fix-strm-images.service", "actions": ("start", "stop", "restart"), "run_unit": "emby-fix-strm-images.service", "hide_in_service_table": True},
     "emby-fix-strm-titles.timer": {"label": "Emby 中文标题简介修正", "log": "emby-fix-strm-titles.service", "actions": ("start", "stop", "restart"), "run_unit": "emby-fix-strm-titles.service", "hide_in_service_table": True},
     "rclone-sync-web.service": {"label": "Rclone 同步控制台", "log": "rclone-sync-web.service", "actions": ("start", "stop", "restart")},
-    "embystream.service": {"label": "EmbyStream 备用线路", "log": "embystream.service", "actions": ("start", "stop", "restart")},
 }
 RCLONE_SYNC_DEFAULT_TASKS = [
     {"id": "symedia_gd", "name": "symedia_gd", "remote": "snakegd_kingsnakerrr", "remote_path": "media/symedia_gd", "local_path": "/home/symedia_gd", "interval_minutes": 10, "enabled": False, "mode": "copy", "metadata_only": False, "confirm_mirror": False, "transfers": 16, "checkers": 16},
@@ -77,7 +76,7 @@ RCLONE_MOUNT_HELP = {
     "transfers": "并行传输数量，播放挂载一般不用太高。",
     "checkers": "并行检查数量，影响扫描目录速度。",
 }
-DOCKER_CONTAINERS = {"emby": "Emby", "cd2": "CloudDrive2", "symedia": "Symedia", "autofilm": "AutoFilm", "emby-tg-notifier": "Emby Telegram 通知"}
+DOCKER_CONTAINERS = {"emby": "Emby", "cd2": "CloudDrive2", "symedia": "Symedia", "emby-tg-notifier": "Emby Telegram 通知"}
 PREWARM_DEFAULTS = {
     "EMBY_PREWARM_HEAD_BYTES": 33554432,
     "EMBY_PREWARM_TAIL_BYTES": 4194304,
@@ -85,12 +84,7 @@ PREWARM_DEFAULTS = {
     "EMBY_PREWARM_MAX_WORKERS": 2,
 }
 FIXER_DEFAULTS = {"image_interval_minutes": 30, "title_interval_minutes": 15, "image_enabled": True, "title_enabled": True, "image_roots": None, "title_roots": None}
-CONFIG_EDITORS = {
-    "embystream_env": {"label": "EmbyStream 私有变量", "path": Path("/root/docker-compose/embystream/.env.private"), "restart": "unit", "target": "embystream.service"},
-    "embystream_toml": {"label": "EmbyStream TOML 配置", "path": Path("/root/docker-compose/embystream/config/config.toml"), "restart": "unit", "target": "embystream.service"},
-    "autofilm_yaml": {"label": "AutoFilm 主配置", "path": Path("/root/docker-compose/autofilm/config/config.yaml"), "restart": "container", "target": "autofilm"},
-    "autofilm_compose": {"label": "AutoFilm Compose", "path": Path("/root/docker-compose/autofilm/compose.yaml"), "restart": "compose", "target": "/root/docker-compose/autofilm"},
-}
+CONFIG_EDITORS = {}
 
 
 def run(command: list[str], timeout: int = 30, cwd: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -694,7 +688,6 @@ def dashboard():
   {% for name, meta, st in units %}<tr><td><strong>{{ meta.label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.active in ['active','activating'] else 'off' if st.exists else 'unknown' }}">{{ st.active }}</span></td><td>{{ st.enabled }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('unit_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button>{% if meta.run_unit %}<button name="action" value="run" class="warn">运行一次</button>{% endif %}<button name="action" value="log">日志</button></form>{% endif %}</td></tr>
   {% if name == 'rclone-sync-web.service' %}<tr><td colspan="4"><details class="subcard fold"><summary><h3>同步任务状态</h3></summary><p class="muted">参数添加、删除和修改去 Rclone 同步控制台，这里只显示已有任务状态。</p>{% for task in tasks %}<div class="task-status"><strong>{{ task.name }}</strong><span class="pill {{ 'on' if task.runtime.running else 'off' }}">{{ task.runtime.status }}</span><span class="muted">{{ task.runtime.message }}</span></div>{% endfor %}{% if not tasks %}<p class="muted">当前没有同步任务。</p>{% endif %}</details></td></tr>{% endif %}
   {% if name == 'emby-play-prewarm.service' %}<tr><td colspan="4"><details class="subcard fold"><summary><h3>播放预热参数 <span class="muted">头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }} / 尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }} / 恢复点 {{ mb(prewarm.EMBY_PREWARM_RESUME_BYTES) }} / 并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</span></h3></summary><form class="compact-form" method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>恢复点 MB<br><input name="resume_mb" type="number" min="0" max="512" value="{{ prewarm.EMBY_PREWARM_RESUME_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label><p><button type="submit">保存并重启预热服务</button></p></form></details></td></tr>{% endif %}
-  {% if name == 'embystream.service' %}<tr><td colspan="4"><details class="subcard"><summary><strong>EmbyStream 使用方法和编辑配置</strong></summary><ul class="help-list muted"><li>客户端连接 EmbyStream 前端入口，走备用 Google Drive API 播放链路；原 Emby 入口仍然保留。</li><li>核心配置是 `.env.private` 的 Emby API Key、Google OAuth、团队盘 ID，以及 `config.toml` 的端口和路径匹配。</li><li>保存配置会自动备份原文件并重启 `embystream.service`。</li></ul><div class="subgrid">{% for key in ['embystream_env','embystream_toml'] %}{% set cfg = configs[key] %}<form method="post" action="{{ url_for('save_config') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ key }}"><h3>{{ cfg.label }}</h3><p class="muted">{{ cfg.path }}{% if not cfg.exists %} / 当前不存在，保存会新建{% endif %}</p><textarea class="editor" name="content" spellcheck="false">{{ cfg.content }}</textarea><p><button type="submit">保存并重启 EmbyStream</button></p></form>{% endfor %}</div></details></td></tr>{% endif %}
   {% endfor %}
   <tr id="strm-monitor"><td><strong>Emby 元素监控补齐</strong><br><span class="muted">图片元素、中文标题和简介定时补齐</span></td><td><span id="image-runtime" class="pill {{ image_runtime.class }}">{{ image_runtime.state }}</span> <span id="title-runtime" class="pill {{ title_runtime.class }}">{{ title_runtime.state }}</span></td><td>{{ 'enabled' if fixers.image_enabled or fixers.title_enabled else 'disabled' }}</td><td><form method="post" action="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button name="kind" value="image" class="warn">图片运行一次</button><button name="kind" value="title" class="warn">中文运行一次</button><button name="kind" value="image-log">图片日志</button><button name="kind" value="title-log">中文日志</button></form></td></tr>
   <tr><td colspan="4">
@@ -745,7 +738,6 @@ def dashboard():
   </section>
   <section class="card wide"><h2>Docker 容器</h2><table><thead><tr><th>容器</th><th>状态</th><th>重启次数</th><th>操作</th></tr></thead><tbody>
   {% for name, label, st in containers %}<tr><td><strong>{{ label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.running else 'off' if st.exists else 'unknown' }}">{{ st.status }}</span></td><td>{{ st.restarts }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('container_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button><button name="action" value="log">日志</button></form>{% endif %}</td></tr>
-  {% if name == 'autofilm' %}<tr><td colspan="4"><details class="subcard"><summary><strong>AutoFilm 使用方法和编辑配置</strong></summary><ul class="help-list muted"><li>AutoFilm 当前主要靠 `config.yaml` 里的 cron 定时任务运行，不是独立网页面板。</li><li>`config.yaml` 配 Alist/OpenList、媒体服务器、生成 STRM、追番和海报任务；`compose.yaml` 配容器挂载路径。</li><li>保存主配置会重启 AutoFilm；保存 compose 会执行 `docker compose up -d` 重建容器。</li></ul><div class="subgrid">{% for key in ['autofilm_yaml','autofilm_compose'] %}{% set cfg = configs[key] %}<form method="post" action="{{ url_for('save_config') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ key }}"><h3>{{ cfg.label }}</h3><p class="muted">{{ cfg.path }}</p><textarea class="editor" name="content" spellcheck="false">{{ cfg.content }}</textarea><p><button type="submit">保存并应用 AutoFilm</button></p></form>{% endfor %}</div></details></td></tr>{% endif %}
   {% endfor %}
   </tbody></table></section>
 </div>

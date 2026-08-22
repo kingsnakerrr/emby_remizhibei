@@ -52,27 +52,6 @@ if systemctl list-unit-files rclone-sync-web.service >/dev/null 2>&1; then
     curl -fsS --max-time 5 http://127.0.0.1:6096/healthz
 fi
 
-if systemctl list-unit-files embystream.service >/dev/null 2>&1; then
-  embystream_healthy() {
-    local active_since refresh_due_count
-    systemctl is-active --quiet embystream.service || return 1
-    active_since="$(
-      systemctl show embystream.service \
-        -p ActiveEnterTimestamp --value
-    )"
-    if journalctl -u embystream.service --since "${active_since}" --no-pager |
-        grep -q 'google_drive_refresh_failed'; then
-      return 1
-    fi
-    refresh_due_count="$(
-      journalctl -u embystream.service --since "10 seconds ago" --no-pager |
-        grep -c 'google_drive_refresh_scheduler_due' || true
-    )"
-    (( refresh_due_count < 20 ))
-  }
-  check "EmbyStream 服务、Google OAuth 和刷新调度器" embystream_healthy
-fi
-
 if [[ ${failed} -ne 0 ]]; then
   exit 1
 fi

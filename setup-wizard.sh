@@ -191,21 +191,6 @@ else
   unset rclone_web_password
 fi
 
-if ask_yes_no "是否安装并配置可选的 EmbyStream 备用播放线路？"; then
-  bash "${REPO_DIR}/scripts/install-embystream.sh"
-  bash "${REPO_DIR}/scripts/show-embystream-guide.sh" "${server_ip}"
-  pause_for_user "保存 .env.private。"
-  bash "${REPO_DIR}/post-auth.sh" embystream
-else
-  cat <<EOF
-已跳过可选的 EmbyStream，不影响 CD2、Symedia 和 Emby 主线路。
-稍后安装：
-  sudo ${REPO_DIR}/scripts/install-embystream.sh
-  sudo ${REPO_DIR}/scripts/show-embystream-guide.sh ${server_ip}
-  sudo ${REPO_DIR}/post-auth.sh embystream
-EOF
-fi
-
 echo
 bash "${REPO_DIR}/healthcheck.sh" || true
 echo
@@ -218,7 +203,6 @@ cat <<EOF
    密码：${rclone_password_summary}
    登录后上传 /root/.config/rclone/rclone.conf，选择团队盘备份目录和本地目录。
 4. Symedia：只有填写有效 License 后才会启动。
-5. EmbyStream：仅在向导中选择安装并完成 Google OAuth 后启用。
 EOF
 echo
 echo "安装向导结束。以上标为 FAIL 的项目完成相应授权后再运行 sudo ./healthcheck.sh。"

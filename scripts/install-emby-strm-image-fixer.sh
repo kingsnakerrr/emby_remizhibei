@@ -61,10 +61,6 @@ CONFIG = Path("/root/docker-compose/emby-tools/strm-fixer-roots.json")
 DB = Path("/root/docker-compose/emby/config/data/library.db")
 AUTH_DB = Path("/root/docker-compose/emby/config/data/authentication.db")
 EMBY_BASE = "http://127.0.0.1:8096"
-TOKEN_FILES = [
-    Path("/root/docker-compose/embystream/config/config.toml"),
-    Path("/root/docker-compose/embystream-test/config/config.toml"),
-]
 DEFAULT_ROOTS = [
     # Keep this focused on movie STRM libraries. Wider scans can be expensive
     # and may copy artwork in unrelated folders.
@@ -103,16 +99,6 @@ def emby_token() -> str:
     token = emby_db_token()
     if token:
         return token
-    for path in TOKEN_FILES:
-        try:
-            text = path.read_text("utf-8", errors="ignore")
-        except OSError:
-            continue
-        for groups in TOKEN_RE.findall(text):
-            token = next((part for part in groups if part), "")
-            token = clean_token(token)
-            if len(token) >= 20:
-                return token
     log_path = Path("/root/docker-compose/emby/config/logs/embyserver.txt")
     try:
         text = log_path.read_text("utf-8", errors="ignore")[-2_000_000:]

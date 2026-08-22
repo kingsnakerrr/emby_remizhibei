@@ -50,7 +50,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 LOG_PATH = "/root/docker-compose/emby/config/logs/embyserver.txt"
 EMBY_BASE = "http://127.0.0.1:8096"
-CONFIG_TOKEN_FILE = "/root/docker-compose/embystream-test/config/config.toml"
 DEFAULT_USER_ID = "3b5504d86b09414eb10c12765bea1e5d"
 HEAD_BYTES = int(os.environ.get("EMBY_PREWARM_HEAD_BYTES", str(32 * 1024 * 1024)))
 TAIL_BYTES = int(os.environ.get("EMBY_PREWARM_TAIL_BYTES", str(4 * 1024 * 1024)))
@@ -71,17 +70,7 @@ recent: dict[str, float] = {}
 recent_lock = threading.Lock()
 
 
-def fallback_token() -> str:
-    try:
-        with open(CONFIG_TOKEN_FILE, "r", encoding="utf-8", errors="ignore") as f:
-            match = re.search(r'token\s*=\s*"([^"]+)"', f.read())
-            return match.group(1) if match else ""
-    except OSError:
-        return ""
-
-
-FALLBACK_TOKEN = fallback_token()
-LAST_TOKEN = FALLBACK_TOKEN
+LAST_TOKEN = ""
 TOKEN_LOCK = threading.Lock()
 
 

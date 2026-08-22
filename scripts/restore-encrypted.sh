@@ -56,7 +56,6 @@ age -d -o "${archive}" "${encrypted}"
 echo "归档前20项："
 tar -tzf "${archive}" | head -20
 
-systemctl stop embystream.service 2>/dev/null || true
 docker stop emby symedia cd2 >/dev/null 2>&1 || true
 
 tar --xattrs --acls -C / -xzf "${archive}"
@@ -76,6 +75,5 @@ cd /root/docker-compose/symedia
 docker compose up -d
 cd /root/docker-compose/emby
 docker compose up -d
-systemctl enable --now embystream.service 2>/dev/null || true
 
 echo "恢复完成，请运行仓库中的 ./healthcheck.sh。"

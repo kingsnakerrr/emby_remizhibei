@@ -8,7 +8,6 @@
 - Emby 播放预热器自动预读冷片源头尾，缓解第一次起播慢；
 - Emby STRM 图片和元素补齐监控自动补齐多版本 STRM 缺失封面，并触发缺失 NFO/背景图/简介的项目重新刮削；
 - Emby STRM 中文标题、简介等修正监控按中文文件夹名修正残留英文标题，并触发英文简介重新刮削；
-- EmbyStream 作为最后按需安装的可选备用线路，通过 Google Drive API 读取；
 - Rclone 网页控制台把另一团队盘中的 STRM/NFO/图片单向增量同步到本地；
 - 神医助手在用户自行安装和授权后应用已验证的播放相关设置。
 
@@ -60,7 +59,6 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | Emby STRM 图片和元素补齐监控 | 本仓库 `scripts/install-emby-strm-image-fixer.sh` | 默认安装为 systemd timer，补齐本地图片名并请求 Emby 刷新缺失元素 |
 | Emby STRM 中文标题、简介等修正监控 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 默认安装为 systemd timer，备份数据库后修正残留英文标题并刷新中文简介 |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
-| EmbyStream | 上游 v0.0.43 + 本仓库刷新调度补丁 | GitHub Actions 可复现构建，固定版本并校验 SHA512 |
 | Rclone 同步控制台 | Debian/Ubuntu 的 `rclone`、`python3-flask` | 本仓库网页服务，端口 6096 |
 
 固定摘要是为了避免 `latest` 更新后配置或插件突然不兼容。
@@ -73,7 +71,6 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 ├── emby
 ├── emby-tools
 ├── emby-play-prewarm
-├── embystream
 ├── rclone-sync
 └── symedia
 ```
@@ -94,10 +91,9 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 - 预先设置 CD2 挂载点 `/CloudNAS/CloudDrive`。
 - 预设 CD2 系统优化参数。
 - 用户在 CD2 添加 `/GoogleDrive` 后，一键应用下载器和磁盘缓存参数。
-- 创建 Symedia、Emby 的固定目录和容器；选择备用线路时再创建 EmbyStream 服务。
+- 创建 Symedia、Emby 的固定目录和容器。
 - 默认安装 Emby 播放预热器；CD2、Emby 和媒体库准备好后自动生效。
 - 固定 Symedia 为当前服务器已验证的镜像摘要，避免 `latest` 漂移。
-- 用户在向导最后选择后才安装 EmbyStream v0.0.43-p1，并校验本仓库发布包 SHA512。p1 修复 OAuth 失败时刷新调度器忙循环导致的 CPU 和日志暴涨。
 - 在神医助手已安装后，一键应用播放相关设置和凌晨任务。
 - 默认安装 STRM 图片和元素补齐监控，每 30 分钟补齐多版本 STRM 的 `*-poster/fanart/backdrop/clearlogo`，并请求 Emby 刷新缺 NFO/图片/简介的项目。
 - 默认安装 STRM 中文标题、简介等修正监控，每 15 分钟纠正刮削后残留的英文展示标题，并请求 Emby 刷新英文简介。
@@ -113,8 +109,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 4. Emby 第一次创建管理员，或恢复加密的完整 `/config`。
 5. Symedia License 和需要登录的第三方服务。
 6. 神医助手 PRO 插件程序和授权；仓库不分发 PRO DLL。
-7. 可选 EmbyStream 的 Emby Token 和 Google OAuth；跳过不影响主线路。
-8. 在 6096 控制台上传 `rclone.conf`，选择备份团队盘目录和本地目标目录。
+7. 在 6096 控制台上传 `rclone.conf`，选择备份团队盘目录和本地目标目录。
 
 账号、OAuth、License 不能写进 GitHub，即使仓库是私有的。
 
@@ -168,17 +163,7 @@ Google、CD2、Emby 的登录密码。
     `admin`，首次登录必须修改。详细说明见
     [Rclone 单向同步控制台](docs/rclone-sync-web.md)。
 
-11. EmbyStream 是可选备用线路。完整的 Web application、OAuth Playground、
-    Desktop app 和 SSH 教程见
-    [EmbyStream 可选备用线路](docs/embystream-optional.md)。选择安装后配置 OAuth 并运行：
-
-    ```bash
-    sudo ./scripts/install-embystream.sh
-    sudo ./scripts/show-embystream-guide.sh VPS-IP
-    sudo ./post-auth.sh embystream
-    ```
-
-12. 验收：
+11. 验收：
 
     ```bash
    sudo ./healthcheck.sh
@@ -350,8 +335,8 @@ sudo ./post-auth.sh strm-assistant
 
 ## 配置恢复模式
 
-配置恢复会包含 Emby 数据库/设置、神医 JSON、CD2 登录、Symedia 配置和
-EmbyStream OAuth，因此只允许保存 `age` 加密后的文件。
+配置恢复会包含 Emby 数据库/设置、神医 JSON、CD2 登录和 Symedia 配置，
+因此只允许保存 `age` 加密后的文件。
 
 Symedia 的原配置不是单个配置文件。恢复包会一起保存：
 
@@ -374,7 +359,7 @@ sudo ./scripts/backup-encrypted.sh /root/emby-stack-backup
 Git 历史。
 
 备份保留 CD2 登录、Emby 数据库和设置、神医配置、Symedia
-YAML/密钥/数据库及 EmbyStream OAuth，但明确不包含：
+YAML/密钥/数据库，但明确不包含：
 
 - `/home` 下的 STRM、NFO、封面和其他已生成媒体元素；
 - Emby 的 `metadata` 海报目录和 `mediainfo-json`；
@@ -392,7 +377,7 @@ sudo ./setup-wizard.sh --restore /path/to/backup-parts-directory
 
 这条命令会先安装 Docker、Compose、Python、SQLite 和 `age`，随后直接恢复原配置，
 不启动一套空白 Symedia 覆盖原状态。恢复后会检查 Symedia 关键文件和 SQLite 数据库，
-再按 CD2 → Symedia/Emby → EmbyStream 的顺序启动。
+再按 CD2 → Symedia/Emby 的顺序启动。
 
 ## CD2 自动配置的边界
 

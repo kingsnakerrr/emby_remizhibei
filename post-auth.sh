@@ -16,9 +16,6 @@ case "${ACTION}" in
   strm-assistant)
     python3 "${REPO_DIR}/scripts/apply-strm-assistant-settings.py"
     ;;
-  embystream)
-    "${REPO_DIR}/scripts/configure-embystream.sh"
-    ;;
   play-prewarm)
     "${REPO_DIR}/scripts/install-emby-play-prewarm.sh"
     ;;
@@ -38,7 +35,7 @@ case "${ACTION}" in
     "${REPO_DIR}/scripts/install-home-media-backup.sh" "${2:-}"
     ;;
   *)
-    echo "Usage: $0 {cd2|strm-assistant|embystream|play-prewarm|strm-image-fixer|strm-title-fixer|stack-control|symedia|home-media-backup}"
+    echo "Usage: $0 {cd2|strm-assistant|play-prewarm|strm-image-fixer|strm-title-fixer|stack-control|symedia|home-media-backup}"
     exit 2
     ;;
 esac

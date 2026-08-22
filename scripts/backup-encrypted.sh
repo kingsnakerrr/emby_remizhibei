@@ -26,7 +26,6 @@ cleanup() {
     docker start cd2 >/dev/null 2>&1 || true
     sleep 10
     docker start symedia emby >/dev/null 2>&1 || true
-    systemctl start embystream.service >/dev/null 2>&1 || true
   fi
   case "${temporary_dir}" in
     /root/emby-backup-work.*) rm -rf -- "${temporary_dir}" ;;
@@ -34,7 +33,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-systemctl stop embystream.service 2>/dev/null || true
 docker stop emby symedia cd2 >/dev/null 2>&1 || true
 services_stopped=1
 
@@ -73,15 +71,6 @@ paths=(
   root/docker-compose/emby
   root/docker-compose/symedia
 )
-if [[ -d /root/docker-compose/embystream ]]; then
-  paths+=(root/docker-compose/embystream)
-fi
-if [[ -f /etc/systemd/system/embystream.service ]]; then
-  paths+=(etc/systemd/system/embystream.service)
-fi
-if [[ -f /etc/nginx/conf.d/embystream-backend.conf ]]; then
-  paths+=(etc/nginx/conf.d/embystream-backend.conf)
-fi
 
 # 下列目录全是可重建缓存、日志、更新包或历史调参备份。排除它们不会
 # 影响账号、任务、数据库和优化参数。媒体文件、STRM、NFO、封面以及
