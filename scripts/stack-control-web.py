@@ -39,8 +39,8 @@ URLS = {
 
 SYSTEMD_UNITS = {
     "emby-play-prewarm.service": {"label": "Emby 播放预热", "log": "emby-play-prewarm.service", "actions": ("start", "stop", "restart")},
-    "emby-fix-strm-images.timer": {"label": "STRM 图片和元素补齐监控", "log": "emby-fix-strm-images.service", "actions": ("start", "stop", "restart"), "run_unit": "emby-fix-strm-images.service"},
-    "emby-fix-strm-titles.timer": {"label": "STRM 中文标题、简介等修正监控", "log": "emby-fix-strm-titles.service", "actions": ("start", "stop", "restart"), "run_unit": "emby-fix-strm-titles.service"},
+    "emby-fix-strm-images.timer": {"label": "Emby 元素图片补齐", "log": "emby-fix-strm-images.service", "actions": ("start", "stop", "restart"), "run_unit": "emby-fix-strm-images.service", "hide_in_service_table": True},
+    "emby-fix-strm-titles.timer": {"label": "Emby 中文标题简介修正", "log": "emby-fix-strm-titles.service", "actions": ("start", "stop", "restart"), "run_unit": "emby-fix-strm-titles.service", "hide_in_service_table": True},
     "rclone-sync-web.service": {"label": "Rclone 同步控制台", "log": "rclone-sync-web.service", "actions": ("start", "stop", "restart")},
     "embystream.service": {"label": "EmbyStream 备用线路", "log": "embystream.service", "actions": ("start", "stop", "restart")},
 }
@@ -658,7 +658,7 @@ def mb(value: int) -> str:
 def dashboard():
     libs = discover_libraries()
     fixers = fixer_settings(libs)
-    units = [(name, meta, unit_status(name)) for name, meta in SYSTEMD_UNITS.items()]
+    units = [(name, meta, unit_status(name)) for name, meta in SYSTEMD_UNITS.items() if not meta.get("hide_in_service_table")]
     mount_units = rclone_mount_units()
     containers = [(name, label, container_status(name)) for name, label in DOCKER_CONTAINERS.items()]
     tasks = sync_tasks()
