@@ -35,7 +35,7 @@ URLS = {
     "sync": f"{DOMAIN}:9443/",
     "cd2": f"{DOMAIN}:10443/",
     "symedia": f"{DOMAIN}:11443/",
-    "tg_notifier": f"{DOMAIN}/tg/",
+    "tg_notifier": f"{DOMAIN}/tgnotify/",
 }
 
 SYSTEMD_UNITS = {

@@ -11,7 +11,7 @@ SOURCE="${REPO_DIR}/compose/emby-tg-notifier"
 TARGET="/root/docker-compose/emby-tg-notifier"
 NGINX_SITE="${EMBY_TG_NGINX_SITE:-/etc/nginx/sites-available/emby-hdz-180o.conf}"
 DOMAIN_NAME="${EMBY_TG_DOMAIN:-hdz.180o.222321.xyz}"
-PUBLIC_PATH="${EMBY_TG_PUBLIC_PATH:-/tg/}"
+PUBLIC_PATH="${EMBY_TG_PUBLIC_PATH:-/tgnotify/}"
 LOCAL_PORT="${EMBY_TG_LOCAL_PORT:-8787}"
 
 if [[ ! -f "${SOURCE}/docker-compose.yml" ]]; then
