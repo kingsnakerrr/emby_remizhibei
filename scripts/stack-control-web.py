@@ -694,14 +694,15 @@ def dashboard():
   {% if name == 'emby-play-prewarm.service' %}<tr><td colspan="4"><details class="subcard fold"><summary><h3>播放预热参数 <span class="muted">头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }} / 尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }} / 恢复点 {{ mb(prewarm.EMBY_PREWARM_RESUME_BYTES) }} / 并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</span></h3></summary><form class="compact-form" method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>恢复点 MB<br><input name="resume_mb" type="number" min="0" max="512" value="{{ prewarm.EMBY_PREWARM_RESUME_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label><p><button type="submit">保存并重启预热服务</button></p></form></details></td></tr>{% endif %}
   {% if name == 'embystream.service' %}<tr><td colspan="4"><details class="subcard"><summary><strong>EmbyStream 使用方法和编辑配置</strong></summary><ul class="help-list muted"><li>客户端连接 EmbyStream 前端入口，走备用 Google Drive API 播放链路；原 Emby 入口仍然保留。</li><li>核心配置是 `.env.private` 的 Emby API Key、Google OAuth、团队盘 ID，以及 `config.toml` 的端口和路径匹配。</li><li>保存配置会自动备份原文件并重启 `embystream.service`。</li></ul><div class="subgrid">{% for key in ['embystream_env','embystream_toml'] %}{% set cfg = configs[key] %}<form method="post" action="{{ url_for('save_config') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ key }}"><h3>{{ cfg.label }}</h3><p class="muted">{{ cfg.path }}{% if not cfg.exists %} / 当前不存在，保存会新建{% endif %}</p><textarea class="editor" name="content" spellcheck="false">{{ cfg.content }}</textarea><p><button type="submit">保存并重启 EmbyStream</button></p></form>{% endfor %}</div></details></td></tr>{% endif %}
   {% endfor %}
-  <tr id="strm-monitor"><td colspan="4">
+  <tr id="strm-monitor"><td><strong>Emby 元素监控补齐</strong><br><span class="muted">图片元素、中文标题和简介定时补齐</span></td><td><span id="image-runtime" class="pill {{ image_runtime.class }}">{{ image_runtime.state }}</span> <span id="title-runtime" class="pill {{ title_runtime.class }}">{{ title_runtime.state }}</span></td><td>{{ 'enabled' if fixers.image_enabled or fixers.title_enabled else 'disabled' }}</td><td><form method="post" action="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button name="kind" value="image" class="warn">图片运行一次</button><button name="kind" value="title" class="warn">中文运行一次</button><button name="kind" value="image-log">图片日志</button><button name="kind" value="title-log">中文日志</button></form></td></tr>
+  <tr><td colspan="4">
     <details class="subcard fold">
-      <summary><h3>Emby 元素监控补齐</h3></summary>
+      <summary><h3>Emby 元素监控参数</h3></summary>
       <p class="muted">新增媒体库会从 Emby 数据库自动出现；全部不勾选时，对应监控不会扫描任何库。</p>
       <form method="post" action="{{ url_for('save_fixers', _anchor='strm-monitor') }}"><input type="hidden" name="csrf" value="{{ csrf }}">
         <div class="subgrid">
           <details class="subcard fold">
-            <summary><h3>图片和元素补齐监控 <span id="image-runtime" class="pill {{ image_runtime.class }}">{{ image_runtime.state }}</span></h3></summary>
+            <summary><h3>图片和元素补齐监控</h3></summary>
             <div class="statusline"><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
             <div class="row"><label><input type="checkbox" name="image_enabled" {% if fixers.image_enabled %}checked{% endif %}> 启动定时轮询</label><label>运行间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label><span></span></div>
             <h3>刷新媒体库</h3>
@@ -709,7 +710,7 @@ def dashboard():
             <p><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="image" class="warn" type="submit">补齐缺失和未扫描</button><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="image-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局扫描补齐会让勾选媒体库全部重新请求 Emby 刮削，确定执行？')">全局扫描补齐</button><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="image-log" type="submit">日志</button></p>
           </details>
           <details class="subcard fold">
-            <summary><h3>中文标题、简介等修正监控 <span id="title-runtime" class="pill {{ title_runtime.class }}">{{ title_runtime.state }}</span></h3></summary>
+            <summary><h3>中文标题、简介等修正监控</h3></summary>
             <div class="statusline"><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
             <div class="row"><label><input type="checkbox" name="title_enabled" {% if fixers.title_enabled %}checked{% endif %}> 启动定时轮询</label><label>运行间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label><span></span></div>
             <h3>刷新媒体库</h3>
