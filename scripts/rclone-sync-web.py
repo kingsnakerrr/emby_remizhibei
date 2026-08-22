@@ -194,6 +194,11 @@ BASE_TEMPLATE = """
     .flash{padding:10px 13px;margin-bottom:14px;border-radius:8px;background:#e7f1ff}
     .status{font-size:24px;font-weight:800}.log{white-space:pre-wrap;height:58vh;overflow:auto;background:#0e1726;color:#d7e3f3;padding:14px;border-radius:9px;font:12px/1.55 Consolas,monospace}
     code{background:#edf2f7;padding:2px 4px;border-radius:4px}
+    details.task summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    details.task summary::-webkit-details-marker{display:none}
+    details.task summary:after{content:"展开参数";color:#65758b;font-size:13px;font-weight:650}
+    details.task[open] summary:after{content:"收起参数"}
+    .task-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.task-head h3{margin:0}.task-head .status{font-size:16px}
   </style>
 </head>
 <body>
@@ -381,9 +386,8 @@ def dashboard():
           <h2>同步任务</h2>
           {% for task in tasks %}
           {% set item = status.tasks.get(task.id, {}) %}
-          <div class="task">
-            <h3>{{ task.name }}</h3>
-            <div class="status {{ 'ok' if item.running else '' }}">{{ '同步中' if item.running else '空闲' }}</div>
+          <details class="task">
+            <summary><div class="task-head"><h3>{{ task.name }}</h3><span class="status {{ 'ok' if item.running else '' }}">{{ '同步中' if item.running else '空闲' }}</span></div></summary>
             <p class="muted">开始：{{ item.last_started or '无' }}　结束：{{ item.last_finished or '无' }}　退出码：{{ item.last_exit_code if item.last_exit_code is not none else '无' }}　PID：{{ item.pid or '无' }}　本地剩余：{{ item.local_free or '未知' }}</p>
             <p>{{ item.last_message or '' }}</p>
             <form method="post" action="{{ url_for('save_task') }}">
@@ -413,7 +417,7 @@ def dashboard():
                 <button class="btn danger" formaction="{{ url_for('stop_sync') }}" type="submit">停止</button>
               </p>
             </form>
-          </div>
+          </details>
           {% endfor %}
         </section>
         <section class="card wide"><h2>日志</h2><pre id="sync-log" class="log">{{ log_text or '暂无日志' }}</pre></section>
