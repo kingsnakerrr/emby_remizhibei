@@ -35,6 +35,7 @@ URLS = {
     "sync": f"{DOMAIN}:9443/",
     "cd2": f"{DOMAIN}:10443/",
     "symedia": f"{DOMAIN}:11443/",
+    "tg_notifier": f"{DOMAIN}/tg/",
 }
 
 SYSTEMD_UNITS = {
@@ -76,7 +77,7 @@ RCLONE_MOUNT_HELP = {
     "transfers": "并行传输数量，播放挂载一般不用太高。",
     "checkers": "并行检查数量，影响扫描目录速度。",
 }
-DOCKER_CONTAINERS = {"emby": "Emby", "cd2": "CloudDrive2", "symedia": "Symedia", "autofilm": "AutoFilm"}
+DOCKER_CONTAINERS = {"emby": "Emby", "cd2": "CloudDrive2", "symedia": "Symedia", "autofilm": "AutoFilm", "emby-tg-notifier": "Emby Telegram 通知"}
 PREWARM_DEFAULTS = {
     "EMBY_PREWARM_HEAD_BYTES": 33554432,
     "EMBY_PREWARM_TAIL_BYTES": 4194304,
@@ -619,6 +620,7 @@ def web_apps() -> list[dict[str, str]]:
         {"name": "Emby", "url": URLS["emby"], "user": "Emby 内账号", "password": "不在控制台保存"},
         {"name": "CloudDrive2", "url": URLS["cd2"], "user": "CD2 内账号", "password": "服务端哈希保存，不能反查"},
         {"name": "Symedia", "url": URLS["symedia"], "user": "Symedia 内账号", "password": "不在控制台保存"},
+        {"name": "Emby Telegram 通知", "url": URLS["tg_notifier"], "user": "admin", "password": "admin"},
         {"name": "Rclone 同步控制台", "url": URLS["sync"], "user": rclone_settings.get("username", rclone_creds.get("username", "admin")), "password": rclone_creds.get("password", "已有哈希，未保存明文")},
         {"name": "Stack Control", "url": URLS["control"], "user": stack.get("username", settings.get("username", "admin")), "password": stack.get("password", "见 /root/docker-compose/stack-control/credentials.txt")},
     ]

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>登录</title><style>
+body{background:#0b1320;color:#fff;font-family:system-ui,"Microsoft YaHei";margin:0}.box{width:min(380px,calc(100% - 30px));margin:12vh auto;background:#172335;padding:26px;border-radius:16px;border:1px solid #2b3b51}
+input{width:100%;box-sizing:border-box;margin:7px 0 14px;padding:12px;border-radius:9px;border:1px solid #33465f;background:#1f2c40;color:#fff}
+button{width:100%;padding:12px;background:#4fbf4f;color:#fff;border:0;border-radius:9px;font-weight:700}.msg{color:#ffb7b7;margin-bottom:12px}
+</style></head><body><div class="box"><h2>Emby Telegram 通知</h2>
+{% if msg %}<div class="msg">{{msg}}</div>{% endif %}
+<form method="post" action="/login" autocomplete="on">
+<label for="login-username">账号</label>
+<input id="login-username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+<label for="login-password">密码</label>
+<input id="login-password" type="password" name="password" autocomplete="current-password" required>
+<button type="submit">登录</button>
+</form>
+</div></body></html>

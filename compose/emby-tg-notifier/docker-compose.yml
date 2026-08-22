@@ -1,0 +1,15 @@
+services:
+  emby-tg-notifier:
+    build: .
+    container_name: emby-tg-notifier
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/data
+      # 用于“检测本机 Emby 容器”功能。若不需要自动检测，可删除下一行。
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=Asia/Shanghai
+      - DB_PATH=/data/app.db
+      - SESSION_SECRET_FILE=/data/session_secret

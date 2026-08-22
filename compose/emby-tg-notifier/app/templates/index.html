@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Emby Telegram 通知</title>
+<style>
+:root{--bg:#0b1320;--card:#172335;--field:#1e2c40;--line:#2c4059;--txt:#eff6ff;--muted:#9db4ce;--green:#4fc54f;--blue:#4d86ef;--red:#fb6565}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,Segoe UI,"Microsoft YaHei",sans-serif}
+.wrap{max-width:1080px;margin:24px auto;padding:0 18px}.header{display:flex;justify-content:space-between;gap:12px;align-items:center}.nav{display:flex;gap:8px;flex-wrap:wrap;margin:18px 0}
+button,.btn{border:0;border-radius:9px;padding:10px 14px;background:var(--green);color:white;font-weight:700;cursor:pointer;text-decoration:none}.nav .active{background:var(--blue)}.secondary{background:#3b516e}.danger{background:var(--red)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:16px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+label{display:block;color:var(--muted);font-size:13px;margin:10px 0 6px}input,select{width:100%;padding:11px 12px;border-radius:9px;border:1px solid var(--line);background:var(--field);color:white}
+.row{display:flex;gap:9px;align-items:end}.row>*{flex:1}.auto{flex:0 0 auto}.muted{color:var(--muted);font-size:13px}.notice{background:#123c20;border:1px solid #27733d;padding:12px;border-radius:10px;margin-bottom:15px}
+.codebox{display:flex;gap:8px;align-items:center;background:#09111c;border:1px solid var(--line);border-radius:9px;padding:8px}.codebox input{border:0;background:transparent;padding:5px;font-family:ui-monospace,monospace}.codebox button{flex:0 0 auto}
+.lib{background:#0b1421;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0}.tag{background:#2a3e59;border-radius:999px;padding:3px 8px;font-size:12px}
+table{width:100%;border-collapse:collapse}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;font-size:14px}th{color:var(--muted)}
+.actions{display:flex;gap:6px}.actions form{margin:0}.tiny{padding:7px 9px;font-size:12px}
+@media(max-width:780px){.grid{grid-template-columns:1fr}.row{display:block}.row>*{margin-bottom:8px}.header{align-items:flex-start}table{display:block;overflow:auto}}
+</style>
+<script>
+const CURRENT_SERVER_ID = {{ server['id']|tojson }};
+const DRAFT_KEY = `emby-tg-draft:${CURRENT_SERVER_ID}`;
+
+async function copyFrom(id, btnId){
+  const el=document.getElementById(id);
+  const b=document.getElementById(btnId);
+  if(!el || !b) return;
+
+  const text=el.value || el.textContent || '';
+  const old=b.innerText;
+
+  const copied=()=>{
+    b.innerText='✓ 已复制';
+    setTimeout(()=>b.innerText=old,1400);
+  };
+
+  try{
+    // Clipboard API normally requires HTTPS or localhost.
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(text);
+      copied();
+      return;
+    }
+
+    // HTTP fallback for VPS panels opened directly by IP/domain.
+    const ta=document.createElement('textarea');
+    ta.value=text;
+    ta.setAttribute('readonly','');
+    ta.style.position='fixed';
+    ta.style.left='-9999px';
+    ta.style.top='0';
+    ta.style.opacity='0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok=document.execCommand('copy');
+    document.body.removeChild(ta);
+    if(!ok) throw new Error('execCommand copy failed');
+    copied();
+  }catch(err){
+    console.error('复制失败:', err);
+    // Last fallback: select the source field so user can Ctrl+C directly.
+    try{
+      el.focus();
+      el.select();
+      el.setSelectionRange(0, el.value.length);
+    }catch(_e){}
+    b.innerText='请按 Ctrl+C';
+    setTimeout(()=>b.innerText=old,2200);
+  }
+}
+
+function setLocalEmby(url){
+  document.getElementById('embyUrlInput').value=url;
+}
+
+function showNotice(message, ok=true){
+  const n=document.getElementById('pageNotice');
+  if(!n) return;
+  n.style.display='block';
+  n.textContent=message;
+  n.style.background = ok ? '#123c20' : '#4a2020';
+  n.style.borderColor = ok ? '#27733d' : '#8d3b3b';
+  n.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+function fieldKey(form, el){
+  return `${form.getAttribute('action') || ''}::${el.name}`;
+}
+
+function saveDrafts(skipAction=''){
+  const data={skipAction, values:{}};
+  document.querySelectorAll('form').forEach(form=>{
+    if(form.dataset.noDraft==='1') return;
+    form.querySelectorAll('input[name],select[name],textarea[name]').forEach(el=>{
+      const type=(el.type||'').toLowerCase();
+      if(['password','hidden','submit','button'].includes(type) || el.readOnly) return;
+      const key=fieldKey(form,el);
+      if(type==='checkbox' || type==='radio'){
+        data.values[key]={kind:type, checked:el.checked, value:el.value};
+      }else{
+        data.values[key]={kind:'value', value:el.value};
+      }
+    });
+  });
+  sessionStorage.setItem(DRAFT_KEY, JSON.stringify(data));
+}
+
+function restoreDrafts(){
+  const raw=sessionStorage.getItem(DRAFT_KEY);
+  if(!raw) return;
+  let data;
+  try{ data=JSON.parse(raw); }catch(e){ return; }
+  document.querySelectorAll('form').forEach(form=>{
+    const action=form.getAttribute('action') || '';
+    if(action===data.skipAction) return;
+    form.querySelectorAll('input[name],select[name],textarea[name]').forEach(el=>{
+      const type=(el.type||'').toLowerCase();
+      if(['password','hidden','submit','button'].includes(type) || el.readOnly) return;
+      const entry=data.values[fieldKey(form,el)];
+      if(!entry) return;
+      if(entry.kind==='checkbox' || entry.kind==='radio'){
+        el.checked=entry.checked;
+      }else{
+        el.value=entry.value;
+      }
+    });
+  });
+  sessionStorage.removeItem(DRAFT_KEY);
+}
+
+async function ajaxSave(form){
+  const button=form.querySelector('button[type="submit"],button:not([type])');
+  const oldText=button ? button.textContent : '';
+  if(button){ button.disabled=true; button.textContent='保存中...'; }
+  try{
+    const resp=await fetch(form.action,{
+      method:'POST',
+      body:new FormData(form),
+      headers:{'X-Requested-With':'fetch'}
+    });
+    let data={};
+    try{ data=await resp.json(); }catch(e){}
+    if(!resp.ok || data.ok===false){
+      showNotice(data.message || `保存失败 (${resp.status})`, false);
+      return;
+    }
+    showNotice(data.message || '保存成功', true);
+
+    if(data.server_name){
+      const tab=document.getElementById('activeServerTab');
+      if(tab) tab.textContent=data.server_name;
+    }
+
+    if(data.logout_required && data.redirect){
+      saveDrafts(form.getAttribute('action') || '');
+      window.location.href=data.redirect;
+    }
+  }catch(e){
+    showNotice(`请求失败：${e}`, false);
+  }finally{
+    if(button){ button.disabled=false; button.textContent=oldText; }
+  }
+}
+
+function renderWebhookStatus(s){
+  const box=document.getElementById('webhookStatus');
+  if(!box) return;
+  if(!s){
+    box.innerHTML='暂未收到 Webhook。你可以在 Emby 中点击“发送测试通知”检查连接。';
+    return;
+  }
+  let time=s.received_at || '';
+  try{ if(time) time=new Date(time).toLocaleString(); }catch(e){}
+  const icon=s.is_test ? '✅' : '📥';
+  const tg=s.telegram_count ? `<br>Telegram：已发送 ${s.telegram_count} 个频道` : '';
+  box.innerHTML=
+    `${icon} 事件：<b>${escapeHtml(s.event || '-')}</b><br>`+
+    `Emby：${escapeHtml(s.source_name || '-')}<br>`+
+    `时间：${escapeHtml(time || '-')}<br>`+
+    `状态：${escapeHtml(s.detail || '-')}${tg}`;
+}
+
+function escapeHtml(v){
+  return String(v).replace(/[&<>"']/g, c=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'
+  })[c]);
+}
+
+async function pollWebhookStatus(){
+  try{
+    const r=await fetch(`/api/servers/${CURRENT_SERVER_ID}/webhook-status`,{
+      headers:{'X-Requested-With':'fetch'}
+    });
+    if(!r.ok) return;
+    const data=await r.json();
+    if(data.ok) renderWebhookStatus(data.status);
+  }catch(e){}
+}
+
+document.addEventListener('DOMContentLoaded',()=>{
+  restoreDrafts();
+
+  const initialTime=document.getElementById('webhookStatusTime');
+  if(initialTime && initialTime.dataset.time){
+    try{ initialTime.textContent=new Date(initialTime.dataset.time).toLocaleString(); }catch(e){}
+  }
+
+  document.querySelectorAll('form[data-ajax-save="1"]').forEach(form=>{
+    form.addEventListener('submit',e=>{
+      e.preventDefault();
+      ajaxSave(form);
+    });
+  });
+
+  const loginForm=document.querySelector('form[data-login-settings="1"]');
+  if(loginForm){
+    loginForm.addEventListener('submit',e=>{
+      const np=loginForm.querySelector('[name="new_password"]')?.value || '';
+      const cp=loginForm.querySelector('[name="confirm_password"]')?.value || '';
+      if(!np && !cp){
+        e.preventDefault();
+        ajaxSave(loginForm);
+      }else{
+        // Keep a normal form submit for password changes so Chrome/Edge
+        // can recognize the conventional change-password flow.
+        saveDrafts(loginForm.getAttribute('action') || '');
+      }
+    });
+  }
+
+  document.querySelectorAll('form:not([data-ajax-save="1"]):not([data-login-settings="1"])').forEach(form=>{
+    form.addEventListener('submit',()=>{
+      if(form.dataset.noDraft==='1') return;
+      saveDrafts(form.getAttribute('action') || '');
+    });
+  });
+
+  pollWebhookStatus();
+  setInterval(pollWebhookStatus, 3000);
+});
+</script>
+</head>
+<body><div class="wrap">
+<div class="header">
+  <div><h2 style="margin:0">Emby → Telegram 入库通知</h2><div class="muted">每台 Emby 独立页面、独立 Webhook；通知 Bot 可默认共用，也可每台单独设置</div></div>
+  <form method="post" action="/logout" data-no-draft="1"><button class="secondary">退出</button></form>
+</div>
+
+<div class="nav">
+{% for s in servers %}
+<a {% if s['id']==server['id'] %}id="activeServerTab"{% endif %} class="btn {% if s['id']==server['id'] %}active{% else %}secondary{% endif %}" href="/?server_id={{s['id']}}">{{s['name']}}</a>
+{% endfor %}
+<form method="post" action="/servers/add" style="display:flex;gap:6px"><input name="name" placeholder="新页面名称" style="width:140px"><button>＋新增服务器</button></form>
+</div>
+
+<div id="pageNotice" class="notice" style="{% if not msg %}display:none{% endif %}">{{msg}}</div>
+
+<div class="grid">
+<div class="card">
+<h3>服务器页面设置 <span class="tag">ID {{server['id']}}</span></h3>
+<form method="post" action="/servers/{{server['id']}}/save" data-ajax-save="1">
+<label>页面名称（顶部按钮名称）</label><input name="name" value="{{server['name']}}">
+<label>Emby 地址</label>
+<input id="embyUrlInput" name="emby_url" value="{{server['emby_url']}}" placeholder="手动输入，例如 http://192.168.1.10:8096">
+
+<div style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#101a28">
+  <div style="font-weight:700;margin-bottom:6px">本机 Docker Emby</div>
+  <div class="muted">如果 Emby 和本通知程序部署在同一台 VPS，并且都是 Docker，推荐让两个容器加入同一个 Docker network，然后使用容器名访问。</div>
+
+  {% if local_emby_containers %}
+    <div style="margin-top:9px;display:flex;flex-direction:column;gap:8px">
+    {% for c in local_emby_containers %}
+      <div class="lib" style="margin:0">
+        <div><b>{{c['name']}}</b> <span class="muted">{{c['image']}}</span></div>
+        <div class="muted" style="margin:4px 0">
+          {% if c['can_use_container_name'] %}
+            ✅ 已与通知程序共享网络：{{ c['shared_networks']|join(', ') }}
+          {% else %}
+            ⚠️ 已检测到本机 Emby，但尚未与通知程序建立共享 Docker 网络。
+          {% endif %}
+        </div>
+
+        {% if c['can_use_container_name'] %}
+          <button type="button" class="tiny" onclick="setLocalEmby('{{c['suggested_url']}}')">
+            填入 {{c['suggested_url']}}
+          </button>
+        {% else %}
+          <form method="post" action="/servers/{{server['id']}}/local-emby/connect" style="margin-top:7px">
+            <input type="hidden" name="container_name" value="{{c['name']}}">
+            <button type="submit" class="tiny">🔗 一键连接本机 Emby</button>
+          </form>
+          <div class="muted" style="margin-top:6px">
+            点击后程序会自动创建/使用 <b>emby-notify-net</b>，把 Emby 与通知程序加入同一网络，测试连通后自动填写 Emby 地址。无需执行 docker network connect。
+          </div>
+        {% endif %}
+      </div>
+    {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted" style="margin-top:8px">没有检测到 Emby 容器。你仍然可以手动输入地址；如果删除了 Docker socket 挂载，自动检测也会不可用。</div>
+  {% endif %}
+
+  <div class="muted" style="margin-top:8px">
+    注意：通知程序运行在 Docker 中时，<b>127.0.0.1:8096 指向通知容器自己</b>，通常不能用来访问宿主机或另一个 Emby 容器。
+  </div>
+  <div class="muted" style="margin-top:6px">
+    通知程序每次启动/重建时都会自动重新加入 <b>emby-notify-net</b>；已存在的 Emby 容器只需首次点击“一键连接本机 Emby”。
+  </div>
+</div>
+<label>Emby API Key</label><input name="emby_api_key" value="{{server['emby_api_key']}}">
+<label>此服务器单独使用的 Telegram Bot Token（可选）</label>
+<input name="bot_token_override" value="{{server['bot_token_override']}}" placeholder="留空 = 使用右侧默认通知 Bot">
+<div class="muted" style="margin-top:6px">如果这台 Emby 想用另一只机器人，就在这里填；留空则使用默认 Bot。</div>
+<label style="display:flex;align-items:center;gap:8px;margin-top:14px;color:var(--txt)">
+  <input type="checkbox" name="send_test_to_telegram" value="1"
+         {% if server['send_test_to_telegram'] %}checked{% endif %}
+         style="width:auto">
+  Emby“发送测试通知”时同步发送 Telegram 测试消息
+</label>
+<div class="muted" style="margin-top:4px">
+  开启后，测试消息会发送到当前服务器所有已启用任务的频道；相同频道只发送一次。
+</div>
+<div style="margin-top:12px;display:flex;gap:8px"><button>保存此服务器</button></form>
+<form method="post" action="/servers/{{server['id']}}/delete" data-no-draft="1" onsubmit="return confirm('确定删除这个服务器页面及其任务吗？')"><button class="danger">删除页面</button></form></div>
+</div>
+
+<div class="card">
+<h3>通知 Telegram Bot</h3>
+<div class="muted">这是默认 Bot。所有服务器均可使用；某台服务器如果填写了自己的 Bot Token，则优先使用自己的。</div>
+<form method="post" action="/settings/bot?server_id={{server['id']}}" data-ajax-save="1">
+<label>默认 Telegram Bot Token</label><input name="global_bot_token" value="{{settings['global_bot_token']}}">
+<div style="margin-top:12px"><button>保存通知 Bot</button></div></form>
+<hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
+<form method="post" action="/settings/login" autocomplete="on" data-login-settings="1">
+<label for="settings-username">登录账号</label>
+<input id="settings-username" name="username" type="text" value="{{settings['username']}}" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+
+<label for="current-password">当前密码</label>
+<input id="current-password" type="password" name="current_password" autocomplete="current-password" required placeholder="修改账号或密码前请输入当前密码">
+
+<label for="new-password">新密码</label>
+<input id="new-password" type="password" name="new_password" autocomplete="new-password" minlength="6" placeholder="不修改密码请留空">
+
+<label for="confirm-password">确认新密码</label>
+<input id="confirm-password" type="password" name="confirm_password" autocomplete="new-password" minlength="6" placeholder="再次输入新密码">
+
+<div class="muted" style="margin-top:6px">修改密码后会自动退出，请使用新密码重新登录。</div>
+<div style="margin-top:12px"><button class="secondary" type="submit">保存登录设置</button></div>
+</form>
+</div>
+</div>
+
+<div class="card">
+<h3>当前服务器 Webhook</h3>
+
+<div class="muted">
+  这个地址要填写到 <b>{{server['name']}}</b> 的 Emby 后台 Webhook 中，事件选择“媒体库 → 已添加新媒体 / New Media Added”。
+  一台 Emby 的多个媒体库、多个 Telegram 通知任务都共用这一条 Webhook，程序收到后再按媒体库分流。
+</div>
+<div style="margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#101a28">
+  <b>Emby 请求内容类型</b>
+  <div class="muted" style="margin-top:6px">
+    v7 同时支持 <b>application/json</b> 和 <b>multipart/form-data</b>。
+    如果你的 Emby 下拉框可以选 application/json，推荐选 JSON；保持 multipart/form-data 也可以。
+    “发送测试通知”会被识别为 <b>system.notificationtest</b>；页面会自动显示最近一次 Webhook 状态。是否同步发送 Telegram，可在上方服务器设置中选择。
+  </div>
+</div>
+
+<div style="margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#101a28">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+    <b>最近 Webhook</b>
+    <span class="muted">自动刷新</span>
+  </div>
+  <div id="webhookStatus" class="muted" style="margin-top:7px">
+    {% if webhook_status %}
+      {% if webhook_status['is_test'] %}✅{% else %}📥{% endif %}
+      事件：<b>{{webhook_status['event']}}</b><br>
+      Emby：{{webhook_status['source_name'] or '-'}}<br>
+      时间：<span id="webhookStatusTime" data-time="{{webhook_status['received_at']}}">{{webhook_status['received_at']}}</span><br>
+      状态：{{webhook_status['detail'] or '-'}}
+      {% if webhook_status['telegram_count'] %}<br>Telegram：已发送 {{webhook_status['telegram_count']}} 个频道{% endif %}
+    {% else %}
+      暂未收到 Webhook。你可以在 Emby 中点击“发送测试通知”检查连接。
+    {% endif %}
+  </div>
+</div>
+
+<label>① 本机 Docker 内网地址</label>
+<div class="codebox">
+  <input id="webhookLocalUrl" readonly value="{{webhook_local_url}}">
+  <button type="button" id="copyLocalBtn" onclick="copyFrom('webhookLocalUrl','copyLocalBtn')">复制本地地址</button>
+</div>
+<div class="muted" style="margin-top:6px">
+  如果 Emby 和通知程序都在本机 Docker，并且两个容器加入了同一个 Docker network，优先使用这个地址。
+  这里的 <b>emby-tg-notifier</b> 是通知容器名，不是 Emby 容器名。
+</div>
+
+<label style="margin-top:14px">② 当前页面公网 IP / 域名地址</label>
+<div class="codebox">
+  <input id="webhookPublicUrl" readonly value="{{webhook_url}}">
+  <button type="button" id="copyPublicBtn" onclick="copyFrom('webhookPublicUrl','copyPublicBtn')">复制公网地址</button>
+</div>
+<div class="muted" style="margin-top:6px">
+  如果 Emby 不在同一个 Docker 网络，或者 Emby 在另一台服务器，就使用这个地址。
+  它会按你当前打开控制页面时使用的 IP / 域名 / 端口自动生成。
+</div>
+
+<div style="margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#101a28">
+  <b>怎么选？</b>
+  <div class="muted" style="margin-top:6px">
+    同一台 VPS + 同一 Docker 网络 → 复制“本机 Docker 内网地址”。<br>
+    不同服务器 / 不同 Docker 网络 / 走反代域名 → 复制“公网 IP / 域名地址”。<br>
+    不建议在 Emby Docker 里使用 127.0.0.1:8787，因为它指向 Emby 容器自己。
+  </div>
+</div>
+
+<form method="post" action="/servers/{{server['id']}}/rotate-webhook" style="margin-top:10px" onsubmit="return confirm('重新生成后，Emby 里原来的 Webhook 地址会立即失效，确定吗？')">
+<button class="secondary">重新生成随机 Webhook 地址</button>
+</form>
+</div>
+
+<div class="card">
+<div class="row"><div><h3 style="margin:0">媒体库 · {{server['name']}}</h3><div class="muted">只读取当前这台 Emby。</div></div>
+<div class="auto"><form method="post" action="/libraries/{{server['id']}}/refresh"><button>🔄 刷新媒体库</button></form></div></div>
+<div style="margin-top:12px">
+{% for l in libraries %}<div class="lib">{{l['name']}} <span class="muted">{{l['id']}}</span></div>{% else %}<div class="muted">暂无媒体库，请先保存 Emby 地址/API Key，再刷新。</div>{% endfor %}
+</div></div>
+
+<div class="card">
+<h3>新增通知任务 · {{server['name']}}</h3>
+<form method="post" action="/routes/{{server['id']}}/add"><div class="row">
+<div><label>任务名称</label><input name="name" placeholder="例如：电影库 → 电影频道" required></div>
+<div><label>当前服务器的媒体库</label><select name="library_id" required>{% for l in libraries %}<option value="{{l['id']}}">{{l['name']}}</option>{% endfor %}</select></div>
+<div><label>Telegram chat_id / @频道</label><input name="chat_id" placeholder="-1001234567890" required></div>
+<div class="auto"><button>添加任务</button></div>
+</div></form>
+</div>
+
+<div class="card">
+<h3>通知任务</h3>
+<table><thead><tr><th>任务</th><th>媒体库</th><th>频道</th><th>状态</th><th>操作</th></tr></thead><tbody>
+{% for r in routes %}
+<tr><td>{{r['name']}}</td><td>{{r['library_name'] or r['library_id']}}</td><td>{{r['chat_id']}}</td>
+<td>{% if r['enabled'] %}启用{% else %}停用{% endif %}</td>
+<td class="actions">
+<form method="post" action="/routes/{{server['id']}}/{{r['id']}}/toggle"><button class="tiny secondary">切换</button></form>
+<form method="post" action="/routes/{{server['id']}}/{{r['id']}}/delete"><button class="tiny danger">删除</button></form>
+</td></tr>
+{% else %}<tr><td colspan="5" class="muted">暂无任务</td></tr>{% endfor %}
+</tbody></table>
+</div>
+
+<div class="card">
+<h3>Telegram 测试</h3>
+<form method="post" action="/telegram/test/{{server['id']}}"><div class="row">
+<div><label>chat_id / @频道</label><input name="chat_id" required></div><div class="auto"><button>发送测试</button></div>
+</div></form>
+</div>
+
+</div></body></html>
