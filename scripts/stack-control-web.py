@@ -161,7 +161,7 @@ button,.btn{border:0;border-radius:6px;padding:7px 10px;margin:2px;background:va
 input{padding:8px;background:#0d1117;color:var(--text);border:1px solid var(--line);border-radius:6px}input[type=number]{width:92px}.row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.muted{color:var(--muted)}.flash{background:#1f2a44;border:1px solid #315a9d;border-radius:8px;padding:10px;margin-bottom:12px}
 pre{white-space:pre-wrap;background:#010409;border:1px solid var(--line);border-radius:8px;padding:12px;max-height:52vh;overflow:auto;font:12px/1.55 Consolas,monospace}.logbox{height:72vh;max-height:72vh}.secret{font-family:Consolas,monospace;word-break:break-all}.checks{columns:2;column-gap:24px}.checks label{display:block;margin:6px 0;break-inside:avoid}
 .split{display:grid;grid-template-columns:minmax(0,2fr) minmax(320px,1fr);gap:14px}.taskbox{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}.taskbox:first-child{border-top:0;margin-top:0;padding-top:0}.inline{display:inline}.field{width:100%}.tiny{width:82px!important}
-.subgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px}.subcard{background:#0f141b;border:1px solid var(--line);border-radius:8px;padding:14px}.subcard .checks{columns:1}.statusline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 12px}.compact-form{display:flex;align-items:end;gap:14px;flex-wrap:wrap}.compact-form label{min-width:92px}.compact-form p{margin:0}.editor{width:100%;min-height:260px;background:#010409;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px;font:12px/1.45 Consolas,monospace}.help-list{margin:8px 0 14px;padding-left:18px}.help-list li{margin:4px 0}
+.subgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px}.subcard{background:#0f141b;border:1px solid var(--line);border-radius:8px;padding:14px}.subcard .checks{columns:1}.statusline{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:4px 0 12px}.compact-form{display:flex;align-items:end;gap:14px;flex-wrap:wrap}.compact-form label{min-width:92px}.compact-form p{margin:0}.editor{width:100%;min-height:260px;background:#010409;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px;font:12px/1.45 Consolas,monospace}.help-list{margin:8px 0 14px;padding-left:18px}.help-list li{margin:4px 0}.task-status{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0}.task-status strong{min-width:120px}.fold summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;gap:12px;align-items:center}.fold summary::-webkit-details-marker{display:none}.fold summary:after{content:"展开参数";color:var(--muted);font-size:12px}.fold[open] summary:after{content:"收起参数"}
 @media(max-width:760px){.row{grid-template-columns:1fr}.checks{columns:1}table{font-size:12px}th,td{padding:8px 5px}}
 @media(max-width:980px){.split{grid-template-columns:1fr}}
 </style></head><body>
@@ -688,21 +688,9 @@ def dashboard():
   {% endfor %}
   {% if not mount_units %}<p class="muted">还没发现 rclone-*.service 挂载。</p>{% endif %}
   </section>
-  <section class="card wide"><h2>Rclone 同步任务</h2><p class="muted">默认任务：symedia_gd 和 symedia_jav，copy 模式，10 分钟，16/16 并发。每个任务单独控制，互不影响。</p>
-  <form method="post" action="{{ url_for('add_sync_task') }}" class="taskbox"><input type="hidden" name="csrf" value="{{ csrf }}"><div class="row"><label>新增任务名<br><input class="field" name="name" placeholder="例如 symedia_tv" required></label><span></span><p><button class="okbtn" type="submit">添加任务</button></p></div></form>
-  {% for task in tasks %}<div class="taskbox"><h3>{{ task.name }} <span class="pill {{ 'on' if task.runtime.running else 'off' }}">{{ task.runtime.status }}</span></h3>
-    <p class="muted">服务：{{ task.runtime.unit }} / systemd: {{ task.runtime.active }} / PID: {{ task.runtime.pid }} / 退出码: {{ task.runtime.exit_code }}</p>
-    <p class="muted">开始：{{ task.runtime.started }} / 结束：{{ task.runtime.finished }} / {{ task.runtime.message }}</p>
-    <form method="post" action="{{ url_for('save_sync_task') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="task_id" value="{{ task.id }}">
-    <div class="row"><label>任务名<br><input class="field" name="name" value="{{ task.name }}" required></label><label>Remote<br><select class="field" name="remote">{% for remote in remotes %}<option value="{{ remote }}" {% if remote == task.remote %}selected{% endif %}>{{ remote }}</option>{% endfor %}{% if task.remote and task.remote not in remotes %}<option value="{{ task.remote }}" selected>{{ task.remote }}</option>{% endif %}</select></label><label>间隔分钟<br><input class="tiny" type="number" name="interval_minutes" min="1" max="1440" value="{{ task.interval_minutes }}"></label></div>
-    <div class="row"><label>云端目录<br><input class="field" name="remote_path" value="{{ task.remote_path }}" required></label><label>本地目录<br><input class="field" name="local_path" value="{{ task.local_path }}" required></label><span></span></div>
-    <div class="row"><label>传输并发<br><input class="tiny" type="number" name="transfers" min="1" max="32" value="{{ task.transfers }}"></label><label>检查并发<br><input class="tiny" type="number" name="checkers" min="1" max="64" value="{{ task.checkers }}"></label><label>模式<br><select class="field" name="mode"><option value="copy" {% if task.mode == 'copy' %}selected{% endif %}>copy 不删本地</option><option value="sync" {% if task.mode == 'sync' %}selected{% endif %}>sync 镜像</option></select></label></div>
-    <p><label><input type="checkbox" name="enabled" {% if task.enabled %}checked{% endif %}> 启用定时同步</label> <label><input type="checkbox" name="metadata_only" {% if task.metadata_only %}checked{% endif %}> 只传 STRM/NFO/图片/字幕</label> <label><input type="checkbox" name="confirm_mirror" {% if task.confirm_mirror %}checked{% endif %}> 确认镜像删除</label></p>
-    <p><button type="submit">保存</button><button formaction="{{ url_for('sync_task_action') }}" name="action" value="run" class="okbtn" type="submit">立即同步</button><button formaction="{{ url_for('sync_task_action') }}" name="action" value="stop" class="danger" type="submit">停止</button><button formaction="{{ url_for('sync_task_action') }}" name="action" value="log" type="submit">日志</button><button formaction="{{ url_for('delete_sync_task') }}" class="danger" type="submit" onclick="return confirm('删除这个同步任务？')">删除</button></p>
-  </form></div>{% endfor %}
-  </section>
   <section class="card wide"><h2>自定义服务和定时器</h2><table><thead><tr><th>功能</th><th>状态</th><th>开机</th><th>操作</th></tr></thead><tbody>
   {% for name, meta, st in units %}<tr><td><strong>{{ meta.label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.active in ['active','activating'] else 'off' if st.exists else 'unknown' }}">{{ st.active }}</span></td><td>{{ st.enabled }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('unit_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button>{% if meta.run_unit %}<button name="action" value="run" class="warn">运行一次</button>{% endif %}<button name="action" value="log">日志</button></form>{% endif %}</td></tr>
+  {% if name == 'rclone-sync-web.service' %}<tr><td colspan="4"><div class="subcard"><h3>同步任务状态</h3><p class="muted">参数添加、删除和修改去 Rclone 同步控制台，这里只显示已有任务状态。</p>{% for task in tasks %}<div class="task-status"><strong>{{ task.name }}</strong><span class="pill {{ 'on' if task.runtime.running else 'off' }}">{{ task.runtime.status }}</span><span class="muted">{{ task.runtime.message }}</span></div>{% endfor %}{% if not tasks %}<p class="muted">当前没有同步任务。</p>{% endif %}</div></td></tr>{% endif %}
   {% if name == 'emby-play-prewarm.service' %}<tr><td colspan="4"><div class="subcard"><h3>播放预热参数</h3><p class="muted">当前：头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }}，尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }}，恢复进度附近 {{ mb(prewarm.EMBY_PREWARM_RESUME_BYTES) }}，并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</p><form class="compact-form" method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>恢复点 MB<br><input name="resume_mb" type="number" min="0" max="512" value="{{ prewarm.EMBY_PREWARM_RESUME_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label><p><button type="submit">保存并重启预热服务</button></p></form></div></td></tr>{% endif %}
   {% if name == 'embystream.service' %}<tr><td colspan="4"><details class="subcard"><summary><strong>EmbyStream 使用方法和编辑配置</strong></summary><ul class="help-list muted"><li>客户端连接 EmbyStream 前端入口，走备用 Google Drive API 播放链路；原 Emby 入口仍然保留。</li><li>核心配置是 `.env.private` 的 Emby API Key、Google OAuth、团队盘 ID，以及 `config.toml` 的端口和路径匹配。</li><li>保存配置会自动备份原文件并重启 `embystream.service`。</li></ul><div class="subgrid">{% for key in ['embystream_env','embystream_toml'] %}{% set cfg = configs[key] %}<form method="post" action="{{ url_for('save_config') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ key }}"><h3>{{ cfg.label }}</h3><p class="muted">{{ cfg.path }}{% if not cfg.exists %} / 当前不存在，保存会新建{% endif %}</p><textarea class="editor" name="content" spellcheck="false">{{ cfg.content }}</textarea><p><button type="submit">保存并重启 EmbyStream</button></p></form>{% endfor %}</div></details></td></tr>{% endif %}
   {% endfor %}
@@ -712,31 +700,29 @@ def dashboard():
   {% if name == 'autofilm' %}<tr><td colspan="4"><details class="subcard"><summary><strong>AutoFilm 使用方法和编辑配置</strong></summary><ul class="help-list muted"><li>AutoFilm 当前主要靠 `config.yaml` 里的 cron 定时任务运行，不是独立网页面板。</li><li>`config.yaml` 配 Alist/OpenList、媒体服务器、生成 STRM、追番和海报任务；`compose.yaml` 配容器挂载路径。</li><li>保存主配置会重启 AutoFilm；保存 compose 会执行 `docker compose up -d` 重建容器。</li></ul><div class="subgrid">{% for key in ['autofilm_yaml','autofilm_compose'] %}{% set cfg = configs[key] %}<form method="post" action="{{ url_for('save_config') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ key }}"><h3>{{ cfg.label }}</h3><p class="muted">{{ cfg.path }}</p><textarea class="editor" name="content" spellcheck="false">{{ cfg.content }}</textarea><p><button type="submit">保存并应用 AutoFilm</button></p></form>{% endfor %}</div></details></td></tr>{% endif %}
   {% endfor %}
   </tbody></table></section>
-  <section id="strm-monitor" class="card wide"><h2>STRM 监控设置</h2>
+  <section id="strm-monitor" class="card wide"><h2>Emby 元素监控补齐</h2>
     <p class="muted">新增媒体库会从 Emby 数据库自动出现；全部不勾选时，对应监控不会扫描任何库。</p>
     <form method="post" action="{{ url_for('save_fixers', _anchor='strm-monitor') }}"><input type="hidden" name="csrf" value="{{ csrf }}">
       <div class="subgrid">
-        <div class="subcard">
-          <h3>图片和元素补齐监控</h3>
-          <div class="statusline"><span>运行状态</span><span id="image-runtime" class="pill {{ image_runtime.class }}">{{ image_runtime.state }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
-          <p><label><input type="checkbox" name="image_enabled" {% if fixers.image_enabled %}checked{% endif %}> 启动定时轮询</label></p>
-          <p><label>运行间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label></p>
+        <details class="subcard fold">
+          <summary><h3>图片和元素补齐监控 <span id="image-runtime" class="pill {{ image_runtime.class }}">{{ image_runtime.state }}</span></h3></summary>
+          <div class="statusline"><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
+          <div class="row"><label><input type="checkbox" name="image_enabled" {% if fixers.image_enabled %}checked{% endif %}> 启动定时轮询</label><label>运行间隔 分钟<br><input name="image_interval" type="number" min="1" max="1440" value="{{ fixers.image_interval_minutes }}"></label><span></span></div>
           <h3>刷新媒体库</h3>
           <div class="checks">{% for lib in libs %}<label><input type="checkbox" name="image_roots" value="{{ lib }}" {% if lib in fixers.image_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
           <p><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="image" class="warn" type="submit">补齐缺失和未扫描</button><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="image-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局扫描补齐会让勾选媒体库全部重新请求 Emby 刮削，确定执行？')">全局扫描补齐</button><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="image-log" type="submit">日志</button></p>
-        </div>
-        <div class="subcard">
-          <h3>中文标题、简介等修正监控</h3>
-          <div class="statusline"><span>运行状态</span><span id="title-runtime" class="pill {{ title_runtime.class }}">{{ title_runtime.state }}</span><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
-          <p><label><input type="checkbox" name="title_enabled" {% if fixers.title_enabled %}checked{% endif %}> 启动定时轮询</label></p>
-          <p><label>运行间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label></p>
+        </details>
+        <details class="subcard fold">
+          <summary><h3>中文标题、简介等修正监控 <span id="title-runtime" class="pill {{ title_runtime.class }}">{{ title_runtime.state }}</span></h3></summary>
+          <div class="statusline"><span class="muted">定时轮询=按间隔自动检查勾选媒体库，不是实时监听。</span></div>
+          <div class="row"><label><input type="checkbox" name="title_enabled" {% if fixers.title_enabled %}checked{% endif %}> 启动定时轮询</label><label>运行间隔 分钟<br><input name="title_interval" type="number" min="1" max="1440" value="{{ fixers.title_interval_minutes }}"></label><span></span></div>
           <h3>刷新媒体库</h3>
           <div class="checks">{% for lib in libs %}<label><input type="checkbox" name="title_roots" value="{{ lib }}" {% if lib in fixers.title_roots %}checked{% endif %}> {{ lib }}</label>{% endfor %}</div>
           <p><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="title" class="warn" type="submit">补齐缺失和未扫描</button><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="title-full" class="danger" type="submit" onclick="return confirm('只会扫描当前勾选的媒体库；全局扫描补齐会让勾选媒体库全部重新请求中文元数据，确定执行？')">全局扫描补齐</button><button formaction="{{ url_for('run_fixer_once', _anchor='strm-monitor') }}" name="kind" value="title-log" type="submit">日志</button></p>
-        </div>
+        </details>
       </div>
       {% if not libs %}<p class="muted">还没从 Emby 数据库发现 /home 下的 STRM 媒体库。</p>{% endif %}
-      <p><button type="submit">保存 STRM 监控设置</button></p>
+      <p><button type="submit">保存 Emby 元素监控设置</button></p>
     </form>
     <script>
     async function refreshFixerStatus(){
@@ -1075,7 +1061,7 @@ def save_fixers():
     try:
         require_csrf()
         save_fixer_config_from_form()
-        flash("STRM 监控设置已保存。")
+        flash("Emby 元素监控设置已保存。")
     except (ValueError, subprocess.TimeoutExpired) as error:
         flash(str(error))
     return redirect(url_for("dashboard", _anchor="strm-monitor"))
