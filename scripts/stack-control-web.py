@@ -667,24 +667,23 @@ def dashboard():
   <section class="card wide"><h2>Web 入口和账号</h2><table><thead><tr><th>软件</th><th>地址</th><th>账号</th><th>密码</th></tr></thead><tbody>
   {% for item in web_apps %}<tr><td><strong>{{ item.name }}</strong></td><td><a class="btn" href="{{ item.url }}" target="_blank">打开网页</a><br><span class="muted">{{ item.url }}</span></td><td class="secret">{{ item.user }}</td><td class="secret">{{ item.password }}</td></tr>{% endfor %}
   </tbody></table></section>
-  <section class="card wide"><h2>Rclone 本地挂载</h2>
-  {% for name, meta, st in mount_units %}{% set cfg = mount_configs[name] %}
-    <details class="taskbox"><summary><strong>{{ cfg.remote or meta.label }}</strong> -> <code>{{ cfg.mount_path or '未识别目录' }}</code> <span class="pill {{ 'on' if st.active in ['active','activating'] else 'off' if st.exists else 'unknown' }}">{{ st.active }}</span> <span class="muted">{{ name }} / {{ st.enabled }}</span></summary>
-      <form method="post" action="{{ url_for('save_mount') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}">
-        <div class="row"><label>Rclone config 名称<br><select class="field" name="remote">{% for remote in remotes %}<option value="{{ remote }}" {% if remote == cfg.remote %}selected{% endif %}>{{ remote }}</option>{% endfor %}{% if cfg.remote and cfg.remote not in remotes %}<option value="{{ cfg.remote }}" selected>{{ cfg.remote }}</option>{% endif %}</select></label><label>挂载到本地目录<br><input class="field" name="mount_path" value="{{ cfg.mount_path }}"></label><span></span></div>
-        <p><button type="button" class="warn" onclick="for (const [k,v] of Object.entries({{ mount_defaults_json|safe }})) { const el = this.form.elements['opt_'+k]; if (el) el.value = v; }">填入本地挂载默认值</button></p>
-        <div class="subgrid">
-        {% for key, value in cfg.options.items() %}
-          <label>{{ key }}<br><input class="field" name="opt_{{ key }}" value="{{ value }}"><span class="muted">{{ mount_help[key] }}</span></label>
-        {% endfor %}
-        </div>
-        <p><button type="submit">保存并重启挂载</button><button formaction="{{ url_for('unit_action') }}" name="action" value="start" class="okbtn" type="submit">启动</button><button formaction="{{ url_for('unit_action') }}" name="action" value="stop" class="danger" type="submit">停止</button><button formaction="{{ url_for('unit_action') }}" name="action" value="restart" type="submit">重启</button><button formaction="{{ url_for('unit_action') }}" name="action" value="log" type="submit">日志</button><input type="hidden" name="dynamic_rclone" value="1"></p>
-      </form>
-    </details>
-  {% endfor %}
-  {% if not mount_units %}<p class="muted">还没发现 rclone-*.service 挂载。</p>{% endif %}
-  </section>
   <section class="card wide"><h2>自定义服务和定时器</h2><table><thead><tr><th>功能</th><th>状态</th><th>开机</th><th>操作</th></tr></thead><tbody>
+  {% for name, meta, st in mount_units %}{% set cfg = mount_configs[name] %}
+  <tr><td><strong>Rclone {{ cfg.remote or meta.label }} 挂载</strong><br><span class="muted">{{ name }} / {{ cfg.mount_path or '未识别目录' }}</span></td><td><span class="pill {{ 'on' if st.active in ['active','activating'] else 'off' if st.exists else 'unknown' }}">{{ st.active }}</span></td><td>{{ st.enabled }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('unit_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}"><input type="hidden" name="dynamic_rclone" value="1"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button><button name="action" value="log">日志</button></form>{% endif %}</td></tr>
+  <tr><td colspan="4"><details class="subcard fold"><summary><h3>Rclone 本地挂载参数 <span class="muted">{{ cfg.remote or '未识别 remote' }} -> {{ cfg.mount_path or '未识别目录' }}</span></h3></summary>
+    <form method="post" action="{{ url_for('save_mount') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}">
+      <div class="row"><label>Rclone config 名称<br><select class="field" name="remote">{% for remote in remotes %}<option value="{{ remote }}" {% if remote == cfg.remote %}selected{% endif %}>{{ remote }}</option>{% endfor %}{% if cfg.remote and cfg.remote not in remotes %}<option value="{{ cfg.remote }}" selected>{{ cfg.remote }}</option>{% endif %}</select></label><label>挂载到本地目录<br><input class="field" name="mount_path" value="{{ cfg.mount_path }}"></label><span></span></div>
+      <p><button type="button" class="warn" onclick="for (const [k,v] of Object.entries({{ mount_defaults_json|safe }})) { const el = this.form.elements['opt_'+k]; if (el) el.value = v; }">填入本地挂载默认值</button></p>
+      <div class="subgrid">
+      {% for key, value in cfg.options.items() %}
+        <label>{{ key }}<br><input class="field" name="opt_{{ key }}" value="{{ value }}"><span class="muted">{{ mount_help[key] }}</span></label>
+      {% endfor %}
+      </div>
+      <p><button type="submit">保存并重启挂载</button></p>
+    </form>
+  </details></td></tr>
+  {% endfor %}
+  {% if not mount_units %}<tr><td colspan="4"><span class="muted">还没发现 rclone-*.service 挂载。</span></td></tr>{% endif %}
   {% for name, meta, st in units %}<tr><td><strong>{{ meta.label }}</strong><br><span class="muted">{{ name }}</span></td><td><span class="pill {{ 'on' if st.active in ['active','activating'] else 'off' if st.exists else 'unknown' }}">{{ st.active }}</span></td><td>{{ st.enabled }}</td><td>{% if st.exists %}<form method="post" action="{{ url_for('unit_action') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="unit" value="{{ name }}"><button name="action" value="start" class="okbtn">启动</button><button name="action" value="stop" class="danger">停止</button><button name="action" value="restart">重启</button>{% if meta.run_unit %}<button name="action" value="run" class="warn">运行一次</button>{% endif %}<button name="action" value="log">日志</button></form>{% endif %}</td></tr>
   {% if name == 'rclone-sync-web.service' %}<tr><td colspan="4"><details class="subcard fold"><summary><h3>同步任务状态</h3></summary><p class="muted">参数添加、删除和修改去 Rclone 同步控制台，这里只显示已有任务状态。</p>{% for task in tasks %}<div class="task-status"><strong>{{ task.name }}</strong><span class="pill {{ 'on' if task.runtime.running else 'off' }}">{{ task.runtime.status }}</span><span class="muted">{{ task.runtime.message }}</span></div>{% endfor %}{% if not tasks %}<p class="muted">当前没有同步任务。</p>{% endif %}</details></td></tr>{% endif %}
   {% if name == 'emby-play-prewarm.service' %}<tr><td colspan="4"><details class="subcard fold"><summary><h3>播放预热参数 <span class="muted">头部 {{ mb(prewarm.EMBY_PREWARM_HEAD_BYTES) }} / 尾部 {{ mb(prewarm.EMBY_PREWARM_TAIL_BYTES) }} / 恢复点 {{ mb(prewarm.EMBY_PREWARM_RESUME_BYTES) }} / 并发 {{ prewarm.EMBY_PREWARM_MAX_WORKERS }}</span></h3></summary><form class="compact-form" method="post" action="{{ url_for('save_prewarm') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><label>头部 MB<br><input name="head_mb" type="number" min="1" max="512" value="{{ prewarm.EMBY_PREWARM_HEAD_BYTES // 1048576 }}"></label><label>尾部 MB<br><input name="tail_mb" type="number" min="0" max="128" value="{{ prewarm.EMBY_PREWARM_TAIL_BYTES // 1048576 }}"></label><label>恢复点 MB<br><input name="resume_mb" type="number" min="0" max="512" value="{{ prewarm.EMBY_PREWARM_RESUME_BYTES // 1048576 }}"></label><label>并发<br><input name="workers" type="number" min="1" max="8" value="{{ prewarm.EMBY_PREWARM_MAX_WORKERS }}"></label><p><button type="submit">保存并重启预热服务</button></p></form></details></td></tr>{% endif %}
