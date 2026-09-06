@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,7 @@ RCLONE_CONFIG = Path("/root/.config/rclone/rclone.conf")
 RCLONE_SYNC_SETTINGS = Path("/root/docker-compose/rclone-sync/settings.json")
 RCLONE_SYNC_STATE = Path("/root/docker-compose/rclone-sync/state.json")
 PREWARM_DROPIN = Path("/etc/systemd/system/emby-play-prewarm.service.d/override.conf")
+TG_NOTIFIER_DB = Path("/root/docker-compose/emby-tg-notifier/data/app.db")
 DOMAIN = "https://hdz.180o.222321.xyz"
 URLS = {
     "emby": f"{DOMAIN}/",
@@ -606,15 +608,46 @@ def format_fixer_summary(kind: str, *units: str) -> str:
     )
 
 
+def verify_tg_password(password: str, stored_hash: str) -> bool:
+    if not stored_hash:
+        return False
+    if stored_hash.startswith("pbkdf2_sha256$"):
+        try:
+            _algo, rounds, salt_hex, digest_hex = stored_hash.split("$", 3)
+            digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), int(rounds))
+            return secrets.compare_digest(digest.hex(), digest_hex)
+        except (ValueError, TypeError):
+            return False
+    legacy = hashlib.sha256(("emby-tg-login-v2" + password).encode("utf-8")).hexdigest()
+    return secrets.compare_digest(legacy, stored_hash)
+
+
+def tg_notifier_credentials() -> dict[str, str]:
+    if not TG_NOTIFIER_DB.exists():
+        return {"user": "admin", "password": "未安装或未初始化"}
+    try:
+        con = sqlite3.connect(f"file:{TG_NOTIFIER_DB}?mode=ro", uri=True)
+        row = con.execute("select username,password_hash from app_settings where id=1").fetchone()
+        con.close()
+    except sqlite3.Error:
+        return {"user": "读取失败", "password": "查看 tgnotify 数据库"}
+    if not row:
+        return {"user": "admin", "password": "未初始化"}
+    username, password_hash = str(row[0] or "admin"), str(row[1] or "")
+    password = "admin" if username == "admin" and verify_tg_password("admin", password_hash) else "已修改，不能反查"
+    return {"user": username, "password": password}
+
+
 def web_apps() -> list[dict[str, str]]:
     stack = parse_kv_file(CREDS_FILE)
     rclone_settings = read_json(Path("/root/docker-compose/rclone-sync/settings.json"), {})
     rclone_creds = parse_kv_file(Path("/root/docker-compose/rclone-sync/credentials.txt"))
+    tg_creds = tg_notifier_credentials()
     return [
         {"name": "Emby", "url": URLS["emby"], "user": "Emby 内账号", "password": "不在控制台保存"},
         {"name": "CloudDrive2", "url": URLS["cd2"], "user": "CD2 内账号", "password": "服务端哈希保存，不能反查"},
         {"name": "Symedia", "url": URLS["symedia"], "user": "Symedia 内账号", "password": "不在控制台保存"},
-        {"name": "Emby Telegram 通知", "url": URLS["tg_notifier"], "user": "admin", "password": "admin"},
+        {"name": "Emby Telegram 通知", "url": URLS["tg_notifier"], "user": tg_creds["user"], "password": tg_creds["password"]},
         {"name": "Rclone 同步控制台", "url": URLS["sync"], "user": rclone_settings.get("username", rclone_creds.get("username", "admin")), "password": rclone_creds.get("password", "已有哈希，未保存明文")},
         {"name": "Stack Control", "url": URLS["control"], "user": stack.get("username", settings.get("username", "admin")), "password": stack.get("password", "见 /root/docker-compose/stack-control/credentials.txt")},
     ]
