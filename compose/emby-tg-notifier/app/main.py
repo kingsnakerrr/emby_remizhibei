@@ -4,6 +4,8 @@ import html
 import sqlite3
 import secrets
 import hashlib
+import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
@@ -467,6 +469,229 @@ def detect_source_quality(item: dict, media_source: dict, video: dict, audio: di
     return " ".join(out)
 
 
+
+def _unique_keep_order(values):
+    out = []
+    seen = set()
+    for value in values:
+        value = " ".join(str(value or "").split()).strip()
+        if not value:
+            continue
+        key = value.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+    return out
+
+
+def _item_paths(item: dict):
+    values = [
+        item.get("Path"),
+        item.get("ResolvedMediaPath"),
+    ]
+    for source in item.get("MediaSources") or []:
+        if isinstance(source, dict):
+            values.append(source.get("Path"))
+    return _unique_keep_order([x for x in values if x])
+
+
+def _looks_like_jav_code(value: str) -> bool:
+    """Conservative JAV code check used only as a secondary hint."""
+    base = Path(str(value or "")).stem.upper()
+    return bool(re.search(r'(?<![A-Z0-9])[A-Z]{2,10}-?\d{2,6}(?![A-Z0-9])', base))
+
+
+def is_jav_item(item: dict) -> bool:
+    """Identify JAV primarily from the configured media path / JAV metadata."""
+    paths = [str(x).replace('\\\\', '/').lower() for x in _item_paths(item)]
+    path_markers = (
+        '/symedia_jav/', '/media/jav/', '/jav/', '/jav-', '/jav_',
+    )
+    if any(any(marker in path for marker in path_markers) for path in paths):
+        return True
+
+    metadata = []
+    for key in ("Genres", "Tags"):
+        value = item.get(key) or []
+        if isinstance(value, list):
+            metadata.extend(str(x) for x in value)
+    for key in ("GenreItems", "TagItems"):
+        value = item.get(key) or []
+        if isinstance(value, list):
+            metadata.extend(str((x or {}).get("Name") or "") for x in value if isinstance(x, dict))
+    joined = " ".join(metadata)
+    if "片商:" in joined or "发行:" in joined:
+        return True
+
+    # Secondary hint only: code-like filename + sidecar NFO available.
+    original_path = str(item.get("Path") or "")
+    if _looks_like_jav_code(original_path):
+        nfo = _find_sidecar_nfo(item)
+        if nfo:
+            return True
+    return False
+
+
+def _find_sidecar_nfo(item: dict):
+    """Find NFO beside the Emby .strm/video path. Prefer same basename."""
+    for raw_path in _item_paths(item):
+        try:
+            media_path = Path(str(raw_path))
+        except Exception:
+            continue
+        parent = media_path.parent
+        if not parent.exists() or not parent.is_dir():
+            continue
+
+        preferred = parent / (media_path.stem + '.nfo')
+        if preferred.exists() and preferred.is_file():
+            return preferred
+
+        # If a .strm points to an MP4, the sidecar normally shares the title code.
+        try:
+            candidates = sorted(parent.glob('*.nfo'))
+        except Exception:
+            candidates = []
+        if len(candidates) == 1:
+            return candidates[0]
+        if candidates:
+            stem = media_path.stem.casefold()
+            for candidate in candidates:
+                if candidate.stem.casefold() == stem:
+                    return candidate
+    return None
+
+
+def _parse_jav_nfo(nfo_path: Path):
+    result = {"actors": [], "directors": [], "tags": []}
+    if not nfo_path:
+        return result
+    try:
+        root = ET.parse(str(nfo_path)).getroot()
+    except Exception:
+        return result
+
+    directors = []
+    for node in root.findall('.//director'):
+        if node.text:
+            directors.append(node.text.strip())
+    directors = _unique_keep_order(directors)
+    director_keys = {x.casefold() for x in directors}
+
+    actors = []
+    for actor in root.findall('.//actor'):
+        name_node = actor.find('name')
+        name = (name_node.text or '').strip() if name_node is not None else ''
+        if name and name.casefold() not in director_keys:
+            actors.append(name)
+    actors = _unique_keep_order(actors)
+
+    tags = []
+    for node in root.findall('./tag'):
+        if node.text:
+            tags.append(node.text.strip())
+    if not tags:
+        for node in root.findall('./genre'):
+            if node.text:
+                tags.append(node.text.strip())
+
+    result["actors"] = actors
+    result["directors"] = directors
+    result["tags"] = _unique_keep_order(tags)
+    return result
+
+
+def _jav_folder_actor_fallback(item: dict) -> str:
+    """
+    Folder layout is normally .../<actress>/<code>/<code>.strm.
+    Skip the code directory and take its parent. If it explicitly says 多人, keep 多人.
+    """
+    path = str(item.get("Path") or "").replace('\\\\', '/')
+    if not path:
+        return "未知"
+    try:
+        media_path = Path(path)
+        code_dir = media_path.parent
+        actor_dir = code_dir.parent
+        code_name = code_dir.name.strip()
+        actor_name = actor_dir.name.strip()
+    except Exception:
+        return "未知"
+
+    multi_words = {"多人", "多人作品", "多人合集", "合集", "multi", "multiple"}
+    for value in (code_name, actor_name):
+        if value.casefold() in {x.casefold() for x in multi_words} or "多人" in value:
+            return "多人"
+
+    # If the immediate parent is not code-like, it may already be the actress folder.
+    if code_name and not _looks_like_jav_code(code_name):
+        if code_name.casefold() not in {"h2606", "jav", "movies", "movie"}:
+            return code_name
+
+    if actor_name and actor_name.casefold() not in {"h2606", "jav", "movies", "movie", "media"}:
+        return actor_name
+    return "未知"
+
+
+def _filter_jav_tags(tags, actors=None, directors=None, max_tags=4):
+    actors = actors or []
+    directors = directors or []
+    names = {x.casefold() for x in actors + directors if x}
+    out = []
+
+    # Technical / organization metadata that should not appear after "类型：JAV".
+    technical = {
+        '4k', '8k', '2160p', '1080p', '720p', 'sd', 'hd', 'uhd',
+        'hevc', 'h264', 'h265', 'av1', 'hdr', 'hdr10', 'dolby vision', 'dv',
+        '单体作品', '纪录片', '出道作品', '精选合集', '4小时+',
+    }
+
+    for tag in tags or []:
+        tag = " ".join(str(tag or "").split()).strip()
+        if not tag:
+            continue
+        low = tag.casefold()
+        if low in names or low in technical:
+            continue
+        if tag.startswith(('系列:', '片商:', '发行:', '系列：', '片商：', '发行：')):
+            continue
+        # Product/label codes such as ROE, IPZZ, SNOS, CJOB.
+        if re.fullmatch(r'[A-Za-z]{2,12}', tag):
+            continue
+        # Code-like tags such as IPZZ-927.
+        if _looks_like_jav_code(tag):
+            continue
+        if tag not in out:
+            out.append(tag)
+        if len(out) >= max_tags:
+            break
+    return out
+
+
+def get_jav_metadata(item: dict):
+    nfo_path = _find_sidecar_nfo(item)
+    parsed = _parse_jav_nfo(nfo_path) if nfo_path else {"actors": [], "directors": [], "tags": []}
+
+    actors = parsed.get("actors") or []
+    if not actors:
+        actors = [_jav_folder_actor_fallback(item)]
+    actors = _unique_keep_order(actors) or ["未知"]
+
+    tags = _filter_jav_tags(
+        parsed.get("tags") or [],
+        actors=actors,
+        directors=parsed.get("directors") or [],
+        max_tags=4,
+    )
+    return {
+        "is_jav": True,
+        "actors": actors,
+        "tags": tags,
+        "nfo_path": str(nfo_path) if nfo_path else "",
+    }
+
+
 def format_caption(item: dict):
     typ = item.get("Type") or ""
     name = item.get("Name") or "新媒体"
@@ -511,7 +736,17 @@ def format_caption(item: dict):
     quality = detect_source_quality(item, ms, video, audio)
 
     lines = [title, "", "📥 <b>Emby 新媒体入库</b>"]
-    if is_tvshow:
+    jav = None
+    if not is_tvshow and is_jav_item(item):
+        jav = get_jav_metadata(item)
+        jav_tags = jav.get("tags") or []
+        type_text = "JAV"
+        if jav_tags:
+            type_text += "，" + "、".join(jav_tags)
+        lines.append(f"🏷 类型：{html.escape(type_text)}")
+        actress_text = "、".join(jav.get("actors") or ["未知"])
+        lines.append(f"👩 老湿：{html.escape(actress_text)}")
+    elif is_tvshow:
         lines.append("🏷 类型：TVshow")
     elif typ:
         lines.append(f"🏷 类型：{html.escape(typ)}")
@@ -597,7 +832,7 @@ async def _get_user_item_details(server: dict, item_id: str):
         try:
             full = await emby_get(
                 server,
-                f"/Users/{user_id}/Items/{item_id}?Fields=MediaSources,MediaStreams,Path,Overview"
+                f"/Users/{user_id}/Items/{item_id}?Fields=MediaSources,MediaStreams,Path,Overview,Genres,Tags"
             )
             if isinstance(full, dict) and str(full.get("Id") or "") == str(item_id):
                 return user_id, full
@@ -701,21 +936,45 @@ async def tg_send(server: dict, chat_id: str, item: dict):
     caption = format_caption(item)
     poster = await download_poster(server, item)
     async with httpx.AsyncClient(timeout=30) as c:
-        if poster:
+        if poster and len(caption) <= 1000:
             r = await c.post(
                 f"https://api.telegram.org/bot{token}/sendPhoto",
                 data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
                 files={"photo": ("poster.jpg", poster, "image/jpeg")}
             )
+            r.raise_for_status()
+            j = r.json()
+            if not j.get("ok"):
+                raise RuntimeError(str(j))
+        elif poster:
+            # Telegram photo captions are limited to 1024 characters. For large
+            # multi-actress JAV entries, send the poster first and the full text next.
+            r = await c.post(
+                f"https://api.telegram.org/bot{token}/sendPhoto",
+                data={"chat_id": chat_id},
+                files={"photo": ("poster.jpg", poster, "image/jpeg")}
+            )
+            r.raise_for_status()
+            j = r.json()
+            if not j.get("ok"):
+                raise RuntimeError(str(j))
+            r = await c.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data={"chat_id": chat_id, "text": caption, "parse_mode": "HTML"}
+            )
+            r.raise_for_status()
+            j = r.json()
+            if not j.get("ok"):
+                raise RuntimeError(str(j))
         else:
             r = await c.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 data={"chat_id": chat_id, "text": caption, "parse_mode": "HTML"}
             )
-        r.raise_for_status()
-        j = r.json()
-        if not j.get("ok"):
-            raise RuntimeError(str(j))
+            r.raise_for_status()
+            j = r.json()
+            if not j.get("ok"):
+                raise RuntimeError(str(j))
 
 
 

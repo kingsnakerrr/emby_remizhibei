@@ -7,6 +7,8 @@ services:
       - "8787:8787"
     volumes:
       - ./data:/data
+      # v11: 只读挂载 Symedia JAV 元数据目录，用于读取同目录 NFO 的女优和影片类型标签。
+      - /home/symedia_jav:/home/symedia_jav:ro
       # 用于“检测本机 Emby 容器”功能。若不需要自动检测，可删除下一行。
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
