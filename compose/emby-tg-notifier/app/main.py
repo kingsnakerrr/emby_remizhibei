@@ -1,15 +1,20 @@
 import os
+import base64
 import json
+import asyncio
+import time
 import html
 import sqlite3
 import secrets
 import hashlib
+import hmac
 import re
+import math
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote
 
 import httpx
 try:
@@ -17,7 +22,7 @@ try:
 except Exception:
     docker = None
 from fastapi import FastAPI, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -25,6 +30,17 @@ DB_PATH = os.getenv("DB_PATH", "/data/app.db")
 SESSION_SECRET_FILE = os.getenv("SESSION_SECRET_FILE", "/data/session_secret")
 WEBHOOK_LOG_DIR = "/data/webhooks"
 LOCAL_DOCKER_NETWORK = "emby-notify-net"
+
+# Keep strong references to delayed cleanup tasks.  asyncio only keeps weak
+# references to tasks created with create_task(); without this set a 10-second
+# Telegram cleanup task can be garbage-collected before it runs.
+BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+def spawn_background(coro):
+    task = asyncio.create_task(coro)
+    BACKGROUND_TASKS.add(task)
+    task.add_done_callback(BACKGROUND_TASKS.discard)
+    return task
 
 def load_or_create_session_secret():
     p = Path(SESSION_SECRET_FILE)
@@ -37,7 +53,7 @@ def load_or_create_session_secret():
 
 app = FastAPI(title="Emby Telegram Notifier")
 app.add_middleware(SessionMiddleware, secret_key=load_or_create_session_secret(), same_site="lax")
-templates = Jinja2Templates(directory="/app/app/templates")
+templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 
 
 def db():
@@ -54,7 +70,8 @@ def init_db():
       id INTEGER PRIMARY KEY CHECK(id=1),
       username TEXT NOT NULL DEFAULT 'admin',
       password_hash TEXT NOT NULL,
-      global_bot_token TEXT DEFAULT ''
+      global_bot_token TEXT DEFAULT '',
+      binding_admin_ids TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS servers(
@@ -64,7 +81,16 @@ def init_db():
       emby_api_key TEXT NOT NULL DEFAULT '',
       bot_token_override TEXT NOT NULL DEFAULT '',
       webhook_token TEXT NOT NULL UNIQUE,
-      send_test_to_telegram INTEGER NOT NULL DEFAULT 0
+      send_test_to_telegram INTEGER NOT NULL DEFAULT 0,
+      senplayer_emby_url TEXT NOT NULL DEFAULT '',
+      notifier_public_url TEXT NOT NULL DEFAULT '',
+      senplayer_user TEXT NOT NULL DEFAULT '',
+      tv_batch_minutes INTEGER NOT NULL DEFAULT 30,
+      tg_binding_enabled INTEGER NOT NULL DEFAULT 0,
+      tg_binding_bot_id TEXT NOT NULL DEFAULT '',
+      tg_binding_bot_token TEXT NOT NULL DEFAULT '',
+      tg_binding_admin_ids TEXT NOT NULL DEFAULT '',
+      senplayer_progress_sync INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS libraries(
@@ -93,11 +119,107 @@ def init_db():
       telegram_count INTEGER NOT NULL DEFAULT 0,
       detail TEXT NOT NULL DEFAULT ''
     );
+
+    CREATE TABLE IF NOT EXISTS tv_batches(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id INTEGER NOT NULL,
+      route_id INTEGER NOT NULL,
+      chat_id TEXT NOT NULL,
+      series_key TEXT NOT NULL,
+      series_name TEXT NOT NULL DEFAULT '',
+      season_key TEXT NOT NULL DEFAULT '',
+      episodes_json TEXT NOT NULL DEFAULT '{}',
+      message_ids_json TEXT NOT NULL DEFAULT '[]',
+      last_item_json TEXT NOT NULL DEFAULT '{}',
+      last_seen_at REAL NOT NULL DEFAULT 0,
+      created_at REAL NOT NULL DEFAULT 0,
+      UNIQUE(server_id, route_id, series_key, season_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS tg_bindings(
+      server_id INTEGER NOT NULL,
+      tg_user_id INTEGER NOT NULL,
+      tg_username TEXT NOT NULL DEFAULT '',
+      tg_display_name TEXT NOT NULL DEFAULT '',
+      emby_user_id TEXT NOT NULL,
+      emby_username TEXT NOT NULL,
+      created_at REAL NOT NULL DEFAULT 0,
+      updated_at REAL NOT NULL DEFAULT 0,
+      PRIMARY KEY(server_id, tg_user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS tg_bind_states(
+      bot_id TEXT NOT NULL,
+      tg_user_id INTEGER NOT NULL,
+      server_id INTEGER NOT NULL DEFAULT 0,
+      state TEXT NOT NULL DEFAULT '',
+      pending_username TEXT NOT NULL DEFAULT '',
+      message_ids TEXT NOT NULL DEFAULT '[]',
+      updated_at REAL NOT NULL DEFAULT 0,
+      PRIMARY KEY(bot_id, tg_user_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS tg_bot_offsets(
+      bot_id TEXT PRIMARY KEY,
+      next_offset INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS senplayer_tickets(
+      token TEXT PRIMARY KEY,
+      server_id INTEGER NOT NULL,
+      item_id TEXT NOT NULL,
+      tg_user_id INTEGER NOT NULL,
+      expires_at REAL NOT NULL,
+      used_at REAL NOT NULL DEFAULT 0,
+      created_at REAL NOT NULL,
+      tg_chat_id TEXT NOT NULL DEFAULT '',
+      tg_message_id INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS tg_cleanup_jobs(
+      token_hash TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      message_id INTEGER NOT NULL,
+      due_at REAL NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(token_hash, chat_id, message_id)
+    );
     """)
     # Schema migration for existing installations.
     server_columns = {r["name"] for r in conn.execute("PRAGMA table_info(servers)").fetchall()}
     if "send_test_to_telegram" not in server_columns:
         conn.execute("ALTER TABLE servers ADD COLUMN send_test_to_telegram INTEGER NOT NULL DEFAULT 0")
+    if "senplayer_emby_url" not in server_columns:
+        conn.execute("ALTER TABLE servers ADD COLUMN senplayer_emby_url TEXT NOT NULL DEFAULT ''")
+    if "notifier_public_url" not in server_columns:
+        conn.execute("ALTER TABLE servers ADD COLUMN notifier_public_url TEXT NOT NULL DEFAULT ''")
+    if "senplayer_user" not in server_columns:
+        conn.execute("ALTER TABLE servers ADD COLUMN senplayer_user TEXT NOT NULL DEFAULT ''")
+    if "tv_batch_minutes" not in server_columns:
+        conn.execute("ALTER TABLE servers ADD COLUMN tv_batch_minutes INTEGER NOT NULL DEFAULT 30")
+    if "tg_binding_enabled" not in server_columns:
+        conn.execute("ALTER TABLE servers ADD COLUMN tg_binding_enabled INTEGER NOT NULL DEFAULT 0")
+    if "tg_binding_bot_id" not in server_columns:
+        conn.execute("ALTER TABLE servers ADD COLUMN tg_binding_bot_id TEXT NOT NULL DEFAULT ''")
+    if "tg_binding_bot_token" not in server_columns:
+        conn.execute("ALTER TABLE servers ADD COLUMN tg_binding_bot_token TEXT NOT NULL DEFAULT ''")
+    ticket_columns = {r["name"] for r in conn.execute("PRAGMA table_info(senplayer_tickets)").fetchall()}
+    if "player" not in ticket_columns:
+        conn.execute("ALTER TABLE senplayer_tickets ADD COLUMN player TEXT NOT NULL DEFAULT 'sp'")
+    if "tg_chat_id" not in ticket_columns:
+        conn.execute("ALTER TABLE senplayer_tickets ADD COLUMN tg_chat_id TEXT NOT NULL DEFAULT ''")
+    if "tg_message_id" not in ticket_columns:
+        conn.execute("ALTER TABLE senplayer_tickets ADD COLUMN tg_message_id INTEGER NOT NULL DEFAULT 0")
+    if "tg_binding_admin_ids" not in server_columns:
+        conn.execute("ALTER TABLE servers ADD COLUMN tg_binding_admin_ids TEXT NOT NULL DEFAULT ''")
+    if "senplayer_progress_sync" not in server_columns:
+        conn.execute("ALTER TABLE servers ADD COLUMN senplayer_progress_sync INTEGER NOT NULL DEFAULT 0")
+    bind_state_columns = {r["name"] for r in conn.execute("PRAGMA table_info(tg_bind_states)").fetchall()}
+    if "message_ids" not in bind_state_columns:
+        conn.execute("ALTER TABLE tg_bind_states ADD COLUMN message_ids TEXT NOT NULL DEFAULT '[]'")
+
+    app_columns = {r["name"] for r in conn.execute("PRAGMA table_info(app_settings)").fetchall()}
+    if "binding_admin_ids" not in app_columns:
+        conn.execute("ALTER TABLE app_settings ADD COLUMN binding_admin_ids TEXT NOT NULL DEFAULT ''")
 
     row = conn.execute("SELECT id FROM app_settings WHERE id=1").fetchone()
     if not row:
@@ -174,12 +296,9 @@ def external_base_url(request: Request) -> str:
     # Prefer reverse-proxy forwarded headers, otherwise use the page's own host.
     proto = request.headers.get("x-forwarded-proto")
     host = request.headers.get("x-forwarded-host")
-    prefix = (request.headers.get("x-forwarded-prefix") or "").strip().rstrip("/")
-    if prefix and not prefix.startswith("/"):
-        prefix = "/" + prefix
     if host:
-        return f"{proto or request.url.scheme}://{host}{prefix}".rstrip("/")
-    return f"{request.url.scheme}://{request.headers.get('host')}{prefix}".rstrip("/")
+        return f"{proto or request.url.scheme}://{host}".rstrip("/")
+    return f"{request.url.scheme}://{request.headers.get('host')}".rstrip("/")
 
 
 def get_settings():
@@ -251,6 +370,45 @@ def bot_token_for_server(server: dict):
     if override:
         return override
     return (get_settings().get("global_bot_token") or "").strip()
+
+
+def binding_bot_token_for_server(server: dict) -> str:
+    """Bot used for TG binding. If an independent token is set, it also becomes
+    this server's effective notification bot so channel callbacks return to the same bot.
+    """
+    token = str(server.get("tg_binding_bot_token") or "").strip()
+    return token or bot_token_for_server(server)
+
+
+def effective_bot_token_for_server(server: dict) -> str:
+    # When TG binding is enabled with an independent bot, the same bot must send
+    # the channel message; Telegram callback_query always returns to the sending bot.
+    if int(server.get("tg_binding_enabled") or 0):
+        token = str(server.get("tg_binding_bot_token") or "").strip()
+        if token:
+            return token
+    return bot_token_for_server(server)
+
+
+def _parse_tg_ids(raw: str) -> set[int]:
+    out=set()
+    for x in re.split(r"[,，;；\s]+", str(raw or "").strip()):
+        if x.isdigit():
+            try: out.add(int(x))
+            except Exception: pass
+    return out
+
+
+def _binding_admin_ids_for_token(token: str) -> set[int]:
+    ids=set()
+    conn=db(); rows=conn.execute("SELECT * FROM servers WHERE tg_binding_enabled=1").fetchall(); conn.close()
+    for r in rows:
+        s=dict(r)
+        if binding_bot_token_for_server(s) == token:
+            ids |= _parse_tg_ids(s.get("tg_binding_admin_ids") or "")
+    # Backward-compatible global admins from v14/v14.1.
+    ids |= _binding_admin_ids()
+    return ids
 
 
 async def emby_get(server: dict, path: str):
@@ -369,16 +527,19 @@ def detect_source_quality(item: dict, media_source: dict, video: dict, audio: di
     except Exception:
         width = None
 
-    if height:
-        if height >= 2000 or (width and width >= 3800):
+    if height or width:
+        # Cinemascope video is commonly stored as 1920x800-960 or 3840x1600.
+        # Classify the source tier using both dimensions instead of treating the
+        # cropped picture height as a lower-resolution encode.
+        if (width and width >= 3800) or (height and height >= 2000):
             parts.append("2160p")
-        elif height >= 1000:
+        elif (width and width >= 1900) or (height and height >= 1000):
             parts.append("1080p")
-        elif height >= 700:
+        elif (width and width >= 1260) or (height and height >= 700):
             parts.append("720p")
-        elif height >= 500:
+        elif height and height >= 500:
             parts.append("576p")
-        elif height >= 400:
+        elif height and height >= 400:
             parts.append("480p")
     else:
         m = re.search(r'\b(2160|1080|720|576|480)p\b', h)
@@ -692,6 +853,35 @@ def get_jav_metadata(item: dict):
     }
 
 
+def _notification_genres(item: dict):
+    values = item.get("NotificationGenres") or item.get("Genres") or []
+    if not isinstance(values, list):
+        values = re.split(r"[,，;/、]", str(values or ""))
+    return _unique_keep_order(values)
+
+
+def _notification_overview(item: dict) -> str:
+    value = item.get("NotificationOverview") or item.get("Overview") or ""
+    value = html.unescape(str(value)).replace("\r\n", "\n").replace("\r", "\n")
+    value = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", value)
+    value = re.sub(r"(?i)</\s*(?:p|div|li)\s*>", "\n", value)
+    value = re.sub(r"(?i)<\s*li(?:\s[^>]*)?>", "• ", value)
+    value = re.sub(r"<[^>]+>", "", value)
+
+    lines = []
+    pending_blank = False
+    for raw_line in value.split("\n"):
+        line = " ".join(raw_line.replace("\u3000", " ").split()).strip()
+        if line:
+            if pending_blank and lines:
+                lines.append("")
+            lines.append(line)
+            pending_blank = False
+        elif lines:
+            pending_blank = True
+    return "\n".join(lines).strip()
+
+
 def format_caption(item: dict):
     typ = item.get("Type") or ""
     name = item.get("Name") or "新媒体"
@@ -735,21 +925,27 @@ def format_caption(item: dict):
     size = bytes_size(ms.get("Size") or item.get("Size"))
     quality = detect_source_quality(item, ms, video, audio)
 
-    lines = [title, "", "📥 <b>Emby 新媒体入库</b>"]
+    lines = [title]
     jav = None
     if not is_tvshow and is_jav_item(item):
         jav = get_jav_metadata(item)
         jav_tags = jav.get("tags") or []
-        type_text = "JAV"
-        if jav_tags:
-            type_text += "，" + "、".join(jav_tags)
-        lines.append(f"🏷 类型：{html.escape(type_text)}")
+        genres = jav_tags or _notification_genres(item)
+        if genres:
+            lines.append(f"🎭 类型：{html.escape('、'.join(genres))}")
         actress_text = "、".join(jav.get("actors") or ["未知"])
         lines.append(f"👩 老湿：{html.escape(actress_text)}")
-    elif is_tvshow:
-        lines.append("🏷 类型：TVshow")
-    elif typ:
-        lines.append(f"🏷 类型：{html.escape(typ)}")
+    else:
+        genres = _notification_genres(item)
+        if genres:
+            lines.append(f"🎭 类型：{html.escape('、'.join(genres))}")
+    overview = _notification_overview(item)
+    if overview:
+        lines.append(f"📝 简介：{html.escape(overview)}")
+    lines.extend(["", "📥 <b>Emby 新媒体入库</b>"])
+    category = "JAV" if jav else ("TVshow" if is_tvshow else typ)
+    if category:
+        lines.append(f"🏷 类别：{html.escape(category)}")
     if quality:
         lines.append(f"🌟 质量：{html.escape(quality)}")
     if size:
@@ -795,22 +991,53 @@ async def find_library_id(server_id: int, server: dict, item: dict) -> Optional[
     return None
 
 
+def _read_sidecar_poster(item: dict):
+    media_path = str(item.get("Path") or "").strip()
+    if not media_path:
+        return None
+
+    path = Path(media_path)
+    candidates = [
+        path.parent / "poster.jpg",
+        path.parent / f"{path.stem}-poster.jpg",
+        path.parent / "folder.jpg",
+        path.parent / "cover.jpg",
+    ]
+    for candidate in candidates:
+        try:
+            if not candidate.is_file():
+                continue
+            content = candidate.read_bytes()
+            if 4 <= len(content) <= 10 * 1024 * 1024 and content.startswith(b"\xff\xd8\xff"):
+                return content
+        except OSError:
+            continue
+    return None
+
+
 async def download_poster(server: dict, item: dict):
+    sidecar = _read_sidecar_poster(item)
+    if sidecar:
+        return sidecar
+
     item_id = item.get("Id")
     if not item_id:
         return None
     url = f"{normalize_url(server['emby_url'])}/emby/Items/{item_id}/Images/Primary"
-    try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.get(
-                url,
-                params={"MaxWidth": 900, "Quality": 90},
-                headers={"X-Emby-Token": server["emby_api_key"]}
-            )
-            if r.status_code == 200 and r.content:
-                return r.content
-    except Exception:
-        return None
+    async with httpx.AsyncClient(timeout=20) as c:
+        for delay in (0, 2, 5):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                r = await c.get(
+                    url,
+                    params={"MaxWidth": 900, "Quality": 90},
+                    headers={"X-Emby-Token": server["emby_api_key"]},
+                )
+                if r.status_code == 200 and r.content:
+                    return r.content
+            except Exception:
+                continue
     return None
 
 
@@ -832,7 +1059,7 @@ async def _get_user_item_details(server: dict, item_id: str):
         try:
             full = await emby_get(
                 server,
-                f"/Users/{user_id}/Items/{item_id}?Fields=MediaSources,MediaStreams,Path,Overview,Genres,Tags"
+                f"/Users/{user_id}/Items/{item_id}?Fields=MediaSources,MediaStreams,Path,Overview,Genres,Tags,ParentId,SeasonId,SeriesId"
             )
             if isinstance(full, dict) and str(full.get("Id") or "") == str(item_id):
                 return user_id, full
@@ -883,18 +1110,16 @@ async def enrich_item_for_notification(server: dict, item: dict) -> dict:
     if not item_id:
         return merged
 
-    # Webhook already has real technical data: no extra API round-trip needed.
-    if _media_details_are_useful(merged):
-        return merged
-
     user_id, full = await _get_user_item_details(server, item_id)
     if isinstance(full, dict):
         for key, value in full.items():
             if value is not None:
                 merged[key] = value
 
-    # Critical .strm fallback: PlaybackInfo resolves the real file and probes it.
-    if not _media_details_are_useful(merged) and user_id:
+    # PlaybackInfo resolves the real file behind .strm. It is the most reliable
+    # source for size, dimensions, codecs, range and audio layout.
+    is_strm = any(str(path).lower().endswith('.strm') for path in _item_paths(merged))
+    if user_id and (is_strm or not _media_details_are_useful(merged)):
         playback = await _get_playback_info(server, item_id, user_id)
         if isinstance(playback, dict):
             playback_sources = playback.get("MediaSources") or []
@@ -910,11 +1135,300 @@ async def enrich_item_for_notification(server: dict, item: dict) -> dict:
                 if first.get("Path"):
                     merged["ResolvedMediaPath"] = first.get("Path")
 
+    # Episode NFO summaries are often individual plot text. For TV notifications
+    # the requested description is the season NFO, falling back to the series NFO.
+    type_lower = str(merged.get("Type") or "").lower()
+    if user_id and type_lower in ("episode", "season", "series"):
+        season_item = None
+        series_item = None
+        season_id = str(merged.get("SeasonId") or (merged.get("ParentId") if type_lower == "episode" else "") or "")
+        series_id = str(merged.get("SeriesId") or (merged.get("ParentId") if type_lower == "season" else "") or "")
+        if season_id:
+            try:
+                season_item = await emby_get(server, f"/Users/{user_id}/Items/{season_id}?Fields=Overview,Genres")
+            except Exception:
+                season_item = None
+        if series_id:
+            try:
+                series_item = await emby_get(server, f"/Users/{user_id}/Items/{series_id}?Fields=Overview,Genres")
+            except Exception:
+                series_item = None
+        season_item = season_item if isinstance(season_item, dict) else {}
+        series_item = series_item if isinstance(series_item, dict) else {}
+        if type_lower == "series":
+            merged["NotificationOverview"] = str(merged.get("Overview") or "")
+            merged["NotificationGenres"] = merged.get("Genres") or []
+        else:
+            merged["NotificationOverview"] = str(season_item.get("Overview") or series_item.get("Overview") or "")
+            merged["NotificationGenres"] = season_item.get("Genres") or series_item.get("Genres") or merged.get("Genres") or []
+
     return merged
 
 
+
+
+async def _resolve_senplayer_user(server: dict):
+    """Resolve configured Emby user by username or id, using the server API key."""
+    wanted = str(server.get("senplayer_user") or "").strip()
+    if not wanted:
+        return None
+    try:
+        users = await emby_get(server, "/Users")
+    except Exception:
+        return None
+    for user in users or []:
+        uid = str((user or {}).get("Id") or "").strip()
+        name = str((user or {}).get("Name") or "").strip()
+        if uid == wanted or name.casefold() == wanted.casefold():
+            return {"Id": uid, "Name": name}
+    return None
+
+
+async def _senplayer_resume_seconds(server: dict, user_id: str, item_id: str) -> int:
+    if not user_id or not item_id:
+        return 0
+    try:
+        item = await emby_get(server, f"/Users/{user_id}/Items/{item_id}?Fields=UserData")
+        ud = (item or {}).get("UserData") or {}
+        ticks = int(ud.get("PlaybackPositionTicks") or 0)
+        return max(0, ticks // 10_000_000)
+    except Exception:
+        return 0
+
+
+async def _update_emby_resume(server: dict, user_id: str, item_id: str, position_seconds: int, finished: bool=False):
+    if not user_id or not item_id:
+        return False
+    base = normalize_url(server.get("emby_url") or "")
+    api_key = str(server.get("emby_api_key") or "").strip()
+    if not base or not api_key:
+        return False
+    payload = {
+        "PlaybackPositionTicks": max(0, int(position_seconds)) * 10_000_000,
+        "LastPlayedDate": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    if finished:
+        payload["Played"] = True
+        payload["PlaybackPositionTicks"] = 0
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(
+                f"{base}/emby/Users/{quote(user_id, safe='')}/Items/{quote(item_id, safe='')}/UserData",
+                headers={"X-Emby-Token": api_key, "Content-Type": "application/json"},
+                json=payload,
+            )
+            r.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+def _senplayer_signature(server: dict, item_id: str) -> str:
+    secret = str(server.get("webhook_token") or "").encode("utf-8")
+    msg = f"{server.get('id')}:{item_id}".encode("utf-8")
+    return hmac.new(secret, msg, hashlib.sha256).hexdigest()[:32]
+
+
+def _binding_play_sig(server: dict, item_id: str, tg_user_id: int) -> str:
+    secret = str(server.get("webhook_token") or "").encode("utf-8")
+    msg = f"bind:{server.get('id')}:{item_id}:{int(tg_user_id)}".encode("utf-8")
+    return hmac.new(secret, msg, hashlib.sha256).hexdigest()[:32]
+
+
+def _binding_callback_sig(server: dict, item_id: str) -> str:
+    return _senplayer_signature(server, item_id)[:10]
+
+
+def _binding_admin_ids() -> set[int]:
+    raw = str(get_settings().get("binding_admin_ids") or "")
+    out = set()
+    for part in re.split(r"[,;\s]+", raw):
+        try:
+            if part.strip(): out.add(int(part.strip()))
+        except Exception:
+            pass
+    return out
+
+
+def get_tg_binding(server_id: int, tg_user_id: int):
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM tg_bindings WHERE server_id=? AND tg_user_id=?",
+        (int(server_id), int(tg_user_id)),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def upsert_tg_binding(server_id: int, tg_user: dict, emby_user: dict):
+    now = time.time()
+    conn = db()
+    conn.execute("""
+      INSERT INTO tg_bindings(server_id,tg_user_id,tg_username,tg_display_name,emby_user_id,emby_username,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?)
+      ON CONFLICT(server_id,tg_user_id) DO UPDATE SET
+        tg_username=excluded.tg_username,
+        tg_display_name=excluded.tg_display_name,
+        emby_user_id=excluded.emby_user_id,
+        emby_username=excluded.emby_username,
+        updated_at=excluded.updated_at
+    """, (
+        int(server_id), int(tg_user.get("id") or 0), str(tg_user.get("username") or ""),
+        " ".join(x for x in [str(tg_user.get("first_name") or ""), str(tg_user.get("last_name") or "")] if x).strip(),
+        str(emby_user.get("Id") or ""), str(emby_user.get("Name") or ""), now, now,
+    ))
+    conn.commit(); conn.close()
+
+
+def set_bind_state(bot_id: str, tg_user_id: int, state: str, server_id: int=0, pending_username: str="", message_ids=None):
+    conn = db()
+    if not state:
+        conn.execute("DELETE FROM tg_bind_states WHERE bot_id=? AND tg_user_id=?", (str(bot_id), int(tg_user_id)))
+    else:
+        if message_ids is None:
+            old = conn.execute(
+                "SELECT message_ids FROM tg_bind_states WHERE bot_id=? AND tg_user_id=?",
+                (str(bot_id), int(tg_user_id))
+            ).fetchone()
+            raw_ids = old["message_ids"] if old else "[]"
+        else:
+            raw_ids = json.dumps([int(x) for x in message_ids if int(x) > 0])
+        conn.execute("""
+          INSERT INTO tg_bind_states(bot_id,tg_user_id,server_id,state,pending_username,message_ids,updated_at)
+          VALUES(?,?,?,?,?,?,?)
+          ON CONFLICT(bot_id,tg_user_id) DO UPDATE SET
+            server_id=excluded.server_id,state=excluded.state,pending_username=excluded.pending_username,
+            message_ids=excluded.message_ids,updated_at=excluded.updated_at
+        """, (str(bot_id), int(tg_user_id), int(server_id), state, pending_username, raw_ids, time.time()))
+    conn.commit(); conn.close()
+
+
+def get_bind_state(bot_id: str, tg_user_id: int):
+    conn=db(); row=conn.execute("SELECT * FROM tg_bind_states WHERE bot_id=? AND tg_user_id=?", (str(bot_id), int(tg_user_id))).fetchone(); conn.close()
+    return dict(row) if row else None
+
+
+def bind_message_ids(bot_id: str, tg_user_id: int) -> list[int]:
+    st = get_bind_state(bot_id, tg_user_id)
+    if not st:
+        return []
+    try:
+        vals = json.loads(st.get("message_ids") or "[]")
+    except Exception:
+        vals = []
+    out=[]
+    for v in vals if isinstance(vals, list) else []:
+        try:
+            iv=int(v)
+            if iv>0 and iv not in out: out.append(iv)
+        except Exception:
+            pass
+    return out
+
+
+def track_bind_message(bot_id: str, tg_user_id: int, message_id) -> None:
+    try:
+        mid=int(message_id or 0)
+    except Exception:
+        mid=0
+    if mid<=0:
+        return
+    st=get_bind_state(bot_id,tg_user_id)
+    if not st:
+        return
+    ids=bind_message_ids(bot_id,tg_user_id)
+    if mid not in ids:
+        ids.append(mid)
+    set_bind_state(bot_id,tg_user_id,str(st.get("state") or ""),int(st.get("server_id") or 0),str(st.get("pending_username") or ""),ids)
+
+
+async def cleanup_bind_messages(token: str, chat_id, bot_id: str, tg_user_id: int, extra_ids=None):
+    ids=bind_message_ids(bot_id,tg_user_id)
+    for x in (extra_ids or []):
+        try:
+            ix=int(x or 0)
+            if ix>0 and ix not in ids: ids.append(ix)
+        except Exception:
+            pass
+    for mid in ids:
+        await bot_delete_message(token,chat_id,mid)
+
+
+def servers_for_binding_bot(token: str, actual_bot_id: str="") -> list[dict]:
+    conn=db(); rows=conn.execute("SELECT * FROM servers WHERE tg_binding_enabled=1 ORDER BY id").fetchall(); conn.close()
+    out=[]
+    for r in rows:
+        s=dict(r)
+        if binding_bot_token_for_server(s) != token:
+            continue
+        out.append(s)
+    return out
+
+
+async def authenticate_emby_credentials(server: dict, username: str, password: str):
+    base=normalize_url(server.get("emby_url") or "")
+    if not base: return None
+    auth='Emby Client="TG Binding Bot", Device="Telegram", DeviceId="emby-tg-notifier", Version="14.6"'
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r=await c.post(
+                f"{base}/emby/Users/AuthenticateByName",
+                headers={"X-Emby-Authorization": auth, "Content-Type": "application/json"},
+                json={"Username": username, "Pw": password},
+            )
+            if r.status_code != 200:
+                return None
+            data=r.json() or {}
+            user=data.get("User") or {}
+            if isinstance(user, list): user=user[0] if user else {}
+            uid=str(user.get("Id") or "").strip()
+            if not uid: return None
+            # We intentionally do not persist the password or user access token.
+            token=str(data.get("AccessToken") or "")
+            if token:
+                try:
+                    await c.post(f"{base}/emby/Sessions/Logout", headers={"X-Emby-Token": token, "X-Emby-Authorization": auth})
+                except Exception:
+                    pass
+            return {"Id": uid, "Name": str(user.get("Name") or username)}
+    except Exception:
+        return None
+
+
+def senplayer_button(server: dict, item: dict):
+    # Only JAV gets the playback button.
+    media_type = str(item.get("Type") or "").strip().lower()
+    if media_type in {"episode", "series", "season"} or not is_jav_item(item):
+        return None
+    item_id = str(item.get("Id") or "").strip()
+    if not item_id:
+        return None
+    if int(server.get("tg_binding_enabled") or 0):
+        # CallbackQuery exposes the Telegram user who clicked the channel button.
+        sig=_binding_callback_sig(server,item_id)
+        data=f"sp:{server['id']}:{item_id}:{sig}"
+        if len(data.encode("utf-8")) <= 64:
+            return {"inline_keyboard": [[
+                {"text": "▶️ SenPlayer 播放", "callback_data": data},
+                {"text": "▶️ PotPlayer 播放", "callback_data": f"pp:{server['id']}:{item_id}:{sig}"},
+            ]]}
+    public_base = normalize_url(server.get("notifier_public_url") or "")
+    if not public_base:
+        return None
+    sig = _senplayer_signature(server, item_id)
+    url = f"{public_base}/senplayer/{server['id']}/{item_id}/{sig}"
+    return {"inline_keyboard": [[{"text": "▶️ SenPlayer 播放", "url": url}]]}
+
+
+def _verify_senplayer_signature(server: dict, item_id: str, sig: str) -> bool:
+    return hmac.compare_digest(_senplayer_signature(server, item_id), sig)
+
+
+def _verify_binding_play_sig(server: dict, item_id: str, tg_user_id: int, sig: str) -> bool:
+    return hmac.compare_digest(_binding_play_sig(server,item_id,tg_user_id), sig)
+
+
 async def tg_send_text(server: dict, chat_id: str, text: str):
-    token = bot_token_for_server(server)
+    token = effective_bot_token_for_server(server)
     if not token:
         raise RuntimeError("当前服务器没有可用的 Telegram Bot Token")
     async with httpx.AsyncClient(timeout=30) as c:
@@ -926,26 +1440,96 @@ async def tg_send_text(server: dict, chat_id: str, text: str):
         data = r.json()
         if not data.get("ok"):
             raise RuntimeError(str(data))
+        return data.get("result") or {}
+
+
+async def tg_delete_messages(server: dict, chat_id: str, message_ids):
+    token = effective_bot_token_for_server(server)
+    if not token:
+        return 0, ["missing bot token"]
+    deleted = 0
+    errors = []
+    async with httpx.AsyncClient(timeout=30) as c:
+        for mid in message_ids or []:
+            try:
+                r = await c.post(
+                    f"https://api.telegram.org/bot{token}/deleteMessage",
+                    data={"chat_id": chat_id, "message_id": int(mid)}
+                )
+                r.raise_for_status()
+                data = r.json()
+                if data.get("ok"):
+                    deleted += 1
+                else:
+                    errors.append(str(data))
+            except Exception as e:
+                errors.append(str(e))
+    return deleted, errors
+
+
+@app.get("/console-mark.png")
+def console_mark():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "downloads", "console-mark.png"), media_type="image/png")
+
+
+_bot_identity_cache = {}
+
+
+@app.get("/console-eye.svg")
+def console_eye():
+    return FileResponse(os.path.join(os.path.dirname(__file__), "downloads", "console-eye.svg"), media_type="image/svg+xml")
+
+
+async def notification_binding_footer(server: dict) -> str:
+    if not int(server.get("tg_binding_enabled") or 0):
+        return ""
+    token = binding_bot_token_for_server(server)
+    if not token:
+        return ""
+    key = hashlib.sha256(token.encode()).hexdigest()
+    cached = _bot_identity_cache.get(key)
+    if cached and cached[0] > time.time():
+        info = cached[1]
+    else:
+        try:
+            info = await asyncio.wait_for(bot_api(token, "getMe"), timeout=5)
+        except Exception:
+            # A transient identity lookup failure must not drop the media notification.
+            _bot_identity_cache[key] = (time.time() + 30, {})
+            return ""
+        _bot_identity_cache[key] = (time.time() + 300, info)
+    username = str(info.get("username") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+        return ""
+    name = html.escape(str(info.get("first_name") or username)[:128])
+    return f'\n\n🔗 绑定 Emby：<a href="https://t.me/{username}?start=bind_{int(server["id"])}">{name}</a>'
 
 
 async def tg_send(server: dict, chat_id: str, item: dict):
     item = await enrich_item_for_notification(server, item)
-    token = bot_token_for_server(server)
+    token = effective_bot_token_for_server(server)
     if not token:
         raise RuntimeError("当前服务器没有可用的 Telegram Bot Token")
     caption = format_caption(item)
+    if is_jav_item(item):
+        caption += await notification_binding_footer(server)
     poster = await download_poster(server, item)
+    keyboard = senplayer_button(server, item)
+    reply_markup = json.dumps(keyboard, ensure_ascii=False) if keyboard else None
+    message_ids = []
     async with httpx.AsyncClient(timeout=30) as c:
         if poster and len(caption) <= 1000:
             r = await c.post(
                 f"https://api.telegram.org/bot{token}/sendPhoto",
-                data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                data={k: v for k, v in {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML", "reply_markup": reply_markup}.items() if v is not None},
                 files={"photo": ("poster.jpg", poster, "image/jpeg")}
             )
             r.raise_for_status()
             j = r.json()
             if not j.get("ok"):
                 raise RuntimeError(str(j))
+            if j.get("result", {}).get("message_id") is not None:
+                message_ids.append(int(j["result"]["message_id"]))
         elif poster:
             # Telegram photo captions are limited to 1024 characters. For large
             # multi-actress JAV entries, send the poster first and the full text next.
@@ -958,24 +1542,259 @@ async def tg_send(server: dict, chat_id: str, item: dict):
             j = r.json()
             if not j.get("ok"):
                 raise RuntimeError(str(j))
+            if j.get("result", {}).get("message_id") is not None:
+                message_ids.append(int(j["result"]["message_id"]))
             r = await c.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                data={"chat_id": chat_id, "text": caption, "parse_mode": "HTML"}
+                data={k: v for k, v in {"chat_id": chat_id, "text": caption, "parse_mode": "HTML", "disable_web_page_preview": "true", "reply_markup": reply_markup}.items() if v is not None}
             )
             r.raise_for_status()
             j = r.json()
             if not j.get("ok"):
                 raise RuntimeError(str(j))
+            if j.get("result", {}).get("message_id") is not None:
+                message_ids.append(int(j["result"]["message_id"]))
         else:
             r = await c.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                data={"chat_id": chat_id, "text": caption, "parse_mode": "HTML"}
+                data={k: v for k, v in {"chat_id": chat_id, "text": caption, "parse_mode": "HTML", "disable_web_page_preview": "true", "reply_markup": reply_markup}.items() if v is not None}
             )
             r.raise_for_status()
             j = r.json()
             if not j.get("ok"):
                 raise RuntimeError(str(j))
+            if j.get("result", {}).get("message_id") is not None:
+                message_ids.append(int(j["result"]["message_id"]))
+    return {"message_ids": message_ids, "item": item}
 
+
+def _episode_size_bytes(item: dict) -> int:
+    try:
+        sources = item.get("MediaSources") or []
+        if sources:
+            return int((sources[0] or {}).get("Size") or item.get("Size") or 0)
+        return int(item.get("Size") or 0)
+    except Exception:
+        return 0
+
+
+def _episode_number(item: dict):
+    value = item.get("IndexNumber")
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _season_number(item: dict):
+    value = item.get("ParentIndexNumber")
+    try:
+        return int(value)
+    except Exception:
+        return value if value is not None else ""
+
+
+def _series_batch_key(item: dict) -> str:
+    return str(item.get("SeriesId") or item.get("SeriesName") or item.get("ParentId") or "").strip()
+
+
+def _episode_range_text(numbers):
+    nums = sorted({int(x) for x in numbers if x is not None})
+    if not nums:
+        return ""
+    parts = []
+    start = prev = nums[0]
+    for n in nums[1:]:
+        if n == prev + 1:
+            prev = n
+            continue
+        if start == prev:
+            parts.append(f"E{start:02d}")
+        else:
+            parts.append(f"E{start:02d}-E{prev:02d}")
+        start = prev = n
+    if start == prev:
+        parts.append(f"E{start:02d}")
+    else:
+        parts.append(f"E{start:02d}-E{prev:02d}")
+    return "、".join(parts)
+
+
+def _tv_batch_quality(item: dict) -> str:
+    media_sources = item.get("MediaSources") or []
+    ms = media_sources[0] if media_sources else {}
+    streams = ms.get("MediaStreams") or item.get("MediaStreams") or []
+    video = next((x for x in streams if str(x.get("Type") or "").lower() == "video"), {})
+    audios = [x for x in streams if str(x.get("Type") or "").lower() == "audio"]
+    audio = next((x for x in audios if x.get("IsDefault")), audios[0] if audios else {})
+    return detect_source_quality(item, ms, video, audio)
+
+
+def format_tv_batch_caption(series_name: str, season, episodes: dict, last_item: dict) -> str:
+    nums = sorted(int(k) for k in episodes.keys() if str(k).lstrip('-').isdigit())
+    season_text = ""
+    try:
+        season_text = f"S{int(season):02d}季"
+    except Exception:
+        season_text = f"S{season}季" if str(season) else ""
+    range_text = _episode_range_text(nums)
+    ep_line = " · ".join(x for x in ["TVshow", season_text, range_text + "集" if range_text else ""] if x)
+    title = series_name or last_item.get('SeriesName') or last_item.get('Name') or '电视剧'
+    year = last_item.get("SeriesProductionYear") or last_item.get("ProductionYear")
+    title_line = f"🎬 <b>{html.escape(title)}</b>" + (f" ({year})" if year else "")
+    lines = [title_line, f"📺 {ep_line}"]
+    genres = _notification_genres(last_item)
+    if genres:
+        lines.append(f"🎭 类型：{html.escape('、'.join(genres))}")
+    overview = _notification_overview(last_item)
+    if overview:
+        lines.append(f"📝 简介：{html.escape(overview)}")
+    lines.extend([
+        "",
+        "📥 <b>Emby 批量入库完成</b>",
+        "🏷 类别：TVshow",
+        f"📦 本次入库：{len(nums)}集",
+    ])
+    quality = _tv_batch_quality(last_item)
+    if quality:
+        lines.append(f"🌟 质量：{html.escape(quality)}")
+    total_size = sum(int((episodes.get(str(n)) or {}).get("size") or 0) for n in nums)
+    if total_size:
+        lines.append(f"💾 总大小：{bytes_size(total_size)}")
+    return "\n".join(lines)
+
+
+async def tg_send_tv_batch(server: dict, chat_id: str, series_name: str, season, episodes: dict, last_item: dict):
+    token = effective_bot_token_for_server(server)
+    if not token:
+        raise RuntimeError("当前服务器没有可用的 Telegram Bot Token")
+    caption = format_tv_batch_caption(series_name, season, episodes, last_item)
+    poster = await download_poster(server, last_item)
+    async with httpx.AsyncClient(timeout=30) as c:
+        if poster and len(caption) <= 1000:
+            r = await c.post(
+                f"https://api.telegram.org/bot{token}/sendPhoto",
+                data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                files={"photo": ("poster.jpg", poster, "image/jpeg")}
+            )
+        else:
+            r = await c.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data={"chat_id": chat_id, "text": caption, "parse_mode": "HTML", "disable_web_page_preview": "true"}
+            )
+        r.raise_for_status()
+        data = r.json()
+        if not data.get("ok"):
+            raise RuntimeError(str(data))
+        return data.get("result") or {}
+
+
+def record_tv_batch(server: dict, route: dict, sent: dict):
+    item = sent.get("item") or {}
+    if str(item.get("Type") or "").lower() != "episode":
+        return
+    series_key = _series_batch_key(item)
+    ep = _episode_number(item)
+    if not series_key or ep is None:
+        return
+    season = _season_number(item)
+    season_key = str(season)
+    now = time.time()
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM tv_batches WHERE server_id=? AND route_id=? AND series_key=? AND season_key=?",
+        (server["id"], route["id"], series_key, season_key)
+    ).fetchone()
+    episodes = json.loads(row["episodes_json"] or "{}") if row else {}
+    message_ids = json.loads(row["message_ids_json"] or "[]") if row else []
+    episodes[str(ep)] = {
+        "size": _episode_size_bytes(item),
+        "item_id": str(item.get("Id") or ""),
+        "name": str(item.get("Name") or ""),
+    }
+    for mid in sent.get("message_ids") or []:
+        if mid not in message_ids:
+            message_ids.append(mid)
+    series_name = str(item.get("SeriesName") or item.get("Name") or "电视剧")
+    if row:
+        conn.execute(
+            """UPDATE tv_batches
+               SET series_name=?, episodes_json=?, message_ids_json=?, last_item_json=?, last_seen_at=?
+               WHERE id=?""",
+            (series_name, json.dumps(episodes, ensure_ascii=False), json.dumps(message_ids),
+             json.dumps(item, ensure_ascii=False), now, row["id"])
+        )
+    else:
+        conn.execute(
+            """INSERT INTO tv_batches(server_id,route_id,chat_id,series_key,series_name,season_key,
+               episodes_json,message_ids_json,last_item_json,last_seen_at,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (server["id"], route["id"], str(route["chat_id"]), series_key, series_name, season_key,
+             json.dumps(episodes, ensure_ascii=False), json.dumps(message_ids), json.dumps(item, ensure_ascii=False), now, now)
+        )
+    conn.commit()
+    conn.close()
+
+
+async def finalize_tv_batch(row: dict):
+    server = get_server(int(row["server_id"]))
+    if not server:
+        return
+    try:
+        episodes = json.loads(row["episodes_json"] or "{}")
+        message_ids = json.loads(row["message_ids_json"] or "[]")
+        last_item = json.loads(row["last_item_json"] or "{}")
+    except Exception:
+        episodes, message_ids, last_item = {}, [], {}
+
+    # One episode means a real single-episode arrival: keep the original notification as-is.
+    if len(episodes) <= 1:
+        conn = db()
+        conn.execute("DELETE FROM tv_batches WHERE id=?", (row["id"],))
+        conn.commit()
+        conn.close()
+        return
+
+    # For a batch: first try to remove all temporary single-episode notifications,
+    # then send one NEW summary so Telegram generates a fresh notification.
+    await tg_delete_messages(server, str(row["chat_id"]), message_ids)
+    await tg_send_tv_batch(
+        server,
+        str(row["chat_id"]),
+        str(row["series_name"] or "电视剧"),
+        row["season_key"],
+        episodes,
+        last_item,
+    )
+    conn = db()
+    conn.execute("DELETE FROM tv_batches WHERE id=?", (row["id"],))
+    conn.commit()
+    conn.close()
+
+
+async def tv_batch_worker():
+    # Persistent SQLite state means pending TV batches survive a container restart.
+    await asyncio.sleep(5)
+    while True:
+        try:
+            now = time.time()
+            conn = db()
+            rows = conn.execute("""
+                SELECT b.*, COALESCE(s.tv_batch_minutes,30) AS tv_batch_minutes
+                FROM tv_batches b
+                JOIN servers s ON s.id=b.server_id
+                WHERE (? - b.last_seen_at) >= (COALESCE(s.tv_batch_minutes,30) * 60)
+                ORDER BY b.last_seen_at ASC
+            """, (now,)).fetchall()
+            conn.close()
+            for row in rows:
+                try:
+                    await finalize_tv_batch(dict(row))
+                except Exception as e:
+                    print(f"TV batch finalize failed id={row['id']}: {e}")
+        except Exception as e:
+            print(f"TV batch worker error: {e}")
+        await asyncio.sleep(30)
 
 
 
@@ -1226,6 +2045,393 @@ async def parse_emby_webhook_request(request: Request):
     raise ValueError("无法解析 Emby Webhook 请求内容")
 
 
+BOT_POLLER_TASKS = {}
+
+async def bot_api(token: str, method: str, data: dict | None=None):
+    async with httpx.AsyncClient(timeout=35) as c:
+        r=await c.post(f"https://api.telegram.org/bot{token}/{method}", data=data or {})
+        r.raise_for_status()
+        j=r.json()
+        if not j.get("ok"):
+            raise RuntimeError(str(j))
+        return j.get("result")
+
+async def bot_send(token: str, chat_id, text: str, reply_markup=None):
+    data={"chat_id": str(chat_id), "text": text, "parse_mode":"HTML"}
+    if reply_markup is not None: data["reply_markup"]=json.dumps(reply_markup, ensure_ascii=False)
+    return await bot_api(token,"sendMessage",data)
+
+async def bot_delete_message(token: str, chat_id, message_id) -> bool:
+    if not token or not chat_id or not message_id:
+        return False
+    try:
+        await bot_api(token,"deleteMessage",{"chat_id":str(chat_id),"message_id":str(message_id)})
+        return True
+    except httpx.HTTPStatusError as e:
+        try:
+            description = str(e.response.json().get("description", "")).lower()
+        except Exception:
+            description = ""
+        if e.response.status_code == 400 and "message to delete not found" in description:
+            return True
+        print(f"[TG cleanup] HTTP {e.response.status_code} chat={chat_id} message={message_id}", flush=True)
+        return False
+    except Exception as e:
+        # Do not break the user flow if Telegram refuses a cleanup, but keep a
+        # visible log so cleanup failures are no longer silently swallowed.
+        print(f"[TG cleanup] {type(e).__name__} chat={chat_id} message={message_id}", flush=True)
+        return False
+
+def bot_delete_message_later(token: str, chat_id, message_id, delay: int = 10):
+    """Persist cleanup without storing another copy of the bot credential."""
+    if not token or not chat_id or not message_id:
+        return
+    with db() as conn:
+        conn.execute("""INSERT INTO tg_cleanup_jobs(token_hash,chat_id,message_id,due_at)
+          VALUES(?,?,?,?) ON CONFLICT(token_hash,chat_id,message_id)
+          DO UPDATE SET due_at=MIN(due_at,excluded.due_at)""",
+          (hashlib.sha256(token.encode()).hexdigest(), str(chat_id), int(message_id),
+           time.time() + max(0, int(delay))))
+    conn.close()
+
+async def run_cleanup_jobs():
+    conn = db()
+    rows = conn.execute("SELECT * FROM tg_cleanup_jobs WHERE due_at<=? ORDER BY due_at LIMIT 10", (time.time(),)).fetchall()
+    servers = conn.execute("SELECT * FROM servers").fetchall()
+    conn.close()
+    tokens = {str(get_settings().get("global_bot_token") or "").strip()}
+    for row in servers:
+        server = dict(row)
+        tokens.update((binding_bot_token_for_server(server), bot_token_for_server(server),
+                       str(server.get("tg_binding_bot_token") or "").strip()))
+    by_hash = {hashlib.sha256(t.encode()).hexdigest(): t for t in tokens if t}
+
+    async def attempt(row):
+        token = by_hash.get(row["token_hash"])
+        ok = bool(token) and await bot_delete_message(token, row["chat_id"], row["message_id"])
+        attempts = row["attempts"] + 1
+        key = (row["token_hash"], row["chat_id"], row["message_id"])
+        with db() as conn:
+            if ok or attempts >= 6:
+                conn.execute("DELETE FROM tg_cleanup_jobs WHERE token_hash=? AND chat_id=? AND message_id=?", key)
+                if not ok:
+                    print(f"[TG cleanup] exhausted retries chat={row['chat_id']} message={row['message_id']}", flush=True)
+            else:
+                conn.execute("UPDATE tg_cleanup_jobs SET attempts=?,due_at=? WHERE token_hash=? AND chat_id=? AND message_id=?",
+                             (attempts, time.time() + min(300, 5 * 2 ** attempts), *key))
+        conn.close()
+    await asyncio.gather(*(attempt(row) for row in rows))
+
+async def telegram_cleanup_worker():
+    while True:
+        try:
+            await run_cleanup_jobs()
+        except Exception as e:
+            print(f"[TG cleanup] worker error: {type(e).__name__}", flush=True)
+        await asyncio.sleep(1)
+
+async def bot_send_temporary(token: str, chat_id, text: str, reply_markup=None, ttl: int = 10):
+    sent = await bot_send(token, chat_id, text, reply_markup)
+    if isinstance(sent, dict):
+        bot_delete_message_later(token, sent.get("chat", {}).get("id", chat_id), sent.get("message_id"), ttl)
+    return sent
+
+async def delete_server_bot_message(server: dict, chat_id, message_id) -> bool:
+    """Delete a message sent by this server's notification/binding bot.
+
+    v14.x permits a per-server notification token and an optional independent
+    binding token.  Try every plausible token, de-duplicated, so a playback
+    message is removed even if the bot configuration changed after it was sent.
+    """
+    tokens=[]
+    for tok in (
+        binding_bot_token_for_server(server),
+        effective_bot_token_for_server(server),
+        bot_token_for_server(server),
+        str(server.get("tg_binding_bot_token") or "").strip(),
+    ):
+        if tok and tok not in tokens:
+            tokens.append(tok)
+    for tok in tokens:
+        if await bot_delete_message(tok, chat_id, message_id):
+            return True
+    return False
+
+
+async def bot_delete_callback_message(token: str, q: dict):
+    """Delete the private inline-menu message immediately after a button is used."""
+    try:
+        msg = q.get("message") or {}
+        chat = msg.get("chat") or {}
+        await bot_delete_message(token, chat.get("id"), msg.get("message_id"))
+    except Exception:
+        pass
+
+async def bot_answer_callback(token: str, callback_id: str, text: str="", show_alert: bool=False, url: str=""):
+    data={"callback_query_id":callback_id}
+    if text: data["text"]=text
+    if show_alert: data["show_alert"]="true"
+    if url: data["url"]=url
+    try: await bot_api(token,"answerCallbackQuery",data)
+    except Exception: pass
+
+async def bot_binding_menu(token: str, chat_id, actual_bot_id: str):
+    servers=servers_for_binding_bot(token,actual_bot_id)
+    kb={"inline_keyboard":[
+        [{"text":"🔗 绑定 Emby","callback_data":"bm:bind"},{"text":"❌ 取消绑定","callback_data":"bm:unbind"}],
+        [{"text":"📋 我的绑定","callback_data":"bm:status"}],
+    ]}
+    await bot_send_temporary(token,chat_id,"<b>Emby 账号绑定</b>\n\n请选择操作：",kb,10)
+
+async def bot_choose_server(token: str, chat_id, actual_bot_id: str, action: str):
+    servers=servers_for_binding_bot(token,actual_bot_id)
+    if not servers:
+        await bot_send_temporary(token,chat_id,"当前没有启用 TG 账号绑定的 Emby 服务器。",ttl=10)
+        return
+    if len(servers)==1:
+        s=servers[0]
+        if action=="bind":
+            set_bind_state(actual_bot_id,int(chat_id),"await_username",s["id"],"")
+            sent=await bot_send(token,chat_id,f"正在绑定 <b>{html.escape(s['name'])}</b>\n\n第一步：请发送你的 <b>Emby 账号</b>。\n发送 /cancel 可取消。")
+            if isinstance(sent,dict): track_bind_message(actual_bot_id,int(chat_id),sent.get("message_id"))
+        else:
+            conn=db(); cur=conn.execute("DELETE FROM tg_bindings WHERE server_id=? AND tg_user_id=?",(s["id"],int(chat_id))); conn.commit(); conn.close()
+            await bot_send(token,chat_id,f"已取消 <b>{html.escape(s['name'])}</b> 的绑定。" if cur.rowcount else "这个服务器目前没有你的绑定。")
+        return
+    rows=[]
+    for s in servers:
+        rows.append([{"text":s["name"],"callback_data":f"bm:{action}srv:{s['id']}"}])
+    await bot_send_temporary(token,chat_id,"请选择 Emby 服务器：",{"inline_keyboard":rows},10)
+
+async def bot_show_status(token: str, chat_id, actual_bot_id: str):
+    servers=servers_for_binding_bot(token,actual_bot_id)
+    lines=["<b>我的 Emby 绑定</b>"]
+    found=False
+    for s in servers:
+        b=get_tg_binding(s["id"],int(chat_id))
+        if b:
+            found=True; lines.append(f"• {html.escape(s['name'])} → <b>{html.escape(b['emby_username'])}</b>")
+    if not found: lines.append("尚未绑定。")
+    await bot_send_temporary(token,chat_id,"\n".join(lines),ttl=10)
+
+async def process_bot_message(token: str, bot_info: dict, msg: dict):
+    chat=msg.get("chat") or {}; user=msg.get("from") or {}; text=str(msg.get("text") or "").strip()
+    if chat.get("type") != "private" or not user.get("id"): return
+    uid=int(user["id"]); chat_id=int(chat["id"]); bot_id=str(bot_info.get("id") or "")
+    cmd=text.split()[0].split('@')[0].lower() if text.startswith('/') else ''
+    if await pot_sync.bot_command(token, msg, cmd):
+        return
+    if cmd in {"/start","/help"}:
+        bot_delete_message_later(token, chat_id, msg.get("message_id"), 10)
+        set_bind_state(bot_id,uid,"",0,"")
+        # Deep link from an unbound channel click: /start bind_<server_id>
+        parts=text.split(maxsplit=1)
+        if len(parts)>1 and parts[1].startswith("bind_"):
+            try:
+                sid=int(parts[1][5:]); s=get_server(sid)
+                if s and int(s["tg_binding_enabled"] or 0) and binding_bot_token_for_server(dict(s))==token:
+                    set_bind_state(bot_id,uid,"await_username",sid,"")
+                    track_bind_message(bot_id,uid,msg.get("message_id"))
+                    sent=await bot_send(token,chat_id,f"正在绑定 <b>{html.escape(s['name'])}</b>\n\n第一步：请发送你的 <b>Emby 账号</b>。\n发送 /cancel 可取消。")
+                    if isinstance(sent,dict): track_bind_message(bot_id,uid,sent.get("message_id"))
+                    return
+            except Exception: pass
+        await bot_binding_menu(token,chat_id,bot_id); return
+    if cmd=="/bind": await bot_choose_server(token,chat_id,bot_id,"bind"); return
+    if cmd=="/unbind": await bot_choose_server(token,chat_id,bot_id,"unbind"); return
+    if cmd in {"/status","/me"}: await bot_show_status(token,chat_id,bot_id); return
+    if cmd=="/cancel":
+        await cleanup_bind_messages(token,chat_id,bot_id,uid,extra_ids=[msg.get("message_id")])
+        set_bind_state(bot_id,uid,"",0,"")
+        await bot_send_temporary(token,chat_id,"已取消当前操作。",ttl=10)
+        return
+    if cmd=="/bindings" and uid in _binding_admin_ids_for_token(token):
+        allowed = [s["id"] for s in servers_for_binding_bot(token)
+                   if uid in _binding_admin_ids() or uid in _parse_tg_ids(s.get("tg_binding_admin_ids") or "")]
+        conn=db()
+        placeholders = ",".join("?" for _ in allowed)
+        rows = conn.execute(f"SELECT b.*,s.name server_name FROM tg_bindings b JOIN servers s ON s.id=b.server_id WHERE b.server_id IN ({placeholders}) ORDER BY b.updated_at DESC LIMIT 100", allowed).fetchall() if allowed else []
+        conn.close()
+        lines=["<b>最近绑定</b>"]+[f"• TG <code>{r['tg_user_id']}</code> → {html.escape(r['server_name'])} / {html.escape(r['emby_username'])}" for r in rows]
+        await bot_send(token,chat_id,"\n".join(lines[:101])); return
+    st=get_bind_state(bot_id,uid)
+    if not st:
+        await bot_binding_menu(token,chat_id,bot_id); return
+    if st["state"]=="await_username":
+        if not text or text.startswith('/'):
+            await bot_send_temporary(token,chat_id,"请发送 Emby 账号。",ttl=10) ; return
+        track_bind_message(bot_id,uid,msg.get("message_id"))
+        set_bind_state(bot_id,uid,"await_password",int(st["server_id"]),text)
+        sent=await bot_send(token,chat_id,"第二步：请发送 <b>Emby 密码</b>。\n密码只用于这次验证，验证后不会保存。绑定成功后，本次绑定过程的聊天记录会自动清理。")
+        if isinstance(sent,dict): track_bind_message(bot_id,uid,sent.get("message_id"))
+        return
+    if st["state"]=="await_password":
+        sid=int(st["server_id"]); srow=get_server(sid); username=str(st.get("pending_username") or "")
+        if not srow:
+            set_bind_state(bot_id,uid,"",0,""); await bot_send_temporary(token,chat_id,"服务器不存在，绑定已取消。",ttl=10); return
+        track_bind_message(bot_id,uid,msg.get("message_id"))
+        await bot_delete_message(token,chat_id,msg.get("message_id"))
+        emby_user=await authenticate_emby_credentials(dict(srow),username,text)
+        if not emby_user:
+            # Wrong credentials: clear the previous username/prompt/error trail immediately,
+            # keep only the in-memory/database pending username so the user can retry password.
+            await cleanup_bind_messages(token,chat_id,bot_id,uid)
+            set_bind_state(bot_id,uid,"await_password",sid,username,[])
+            await bot_send_temporary(token,chat_id,"❌ Emby 账号或密码验证失败。\n请重新发送密码，或 /cancel 取消。",ttl=10)
+            return
+        upsert_tg_binding(sid,user,emby_user)
+        await cleanup_bind_messages(token,chat_id,bot_id,uid)
+        set_bind_state(bot_id,uid,"",0,"")
+        await bot_send(token,chat_id,f"✅ 绑定“<b>{html.escape(srow['name'])}</b>”成功，愉快的屌之北吧。")
+
+
+def create_senplayer_ticket(server_id: int, item_id: str, tg_user_id: int, ttl: int = 300, player: str = "sp") -> str:
+    if player not in {"sp", "pp"}:
+        raise ValueError("Unsupported player")
+    token=secrets.token_urlsafe(32); now=time.time(); conn=db()
+    conn.execute("DELETE FROM senplayer_tickets WHERE expires_at<? OR used_at>0",(now-3600,))
+    conn.execute("INSERT INTO senplayer_tickets(token,server_id,item_id,tg_user_id,expires_at,used_at,created_at,player) VALUES(?,?,?,?,?,0,?,?)",(token,int(server_id),str(item_id),int(tg_user_id),now+ttl,now,player))
+    conn.commit(); conn.close(); return token
+
+def attach_senplayer_ticket_message(token: str, chat_id, message_id) -> None:
+    try:
+        conn=db()
+        conn.execute("UPDATE senplayer_tickets SET tg_chat_id=?, tg_message_id=? WHERE token=?",
+                     (str(chat_id or ""), int(message_id or 0), token))
+        conn.commit(); conn.close()
+    except Exception:
+        pass
+
+def consume_senplayer_ticket(token: str, player: str = "sp"):
+    now=time.time(); conn=db(); row=conn.execute("SELECT * FROM senplayer_tickets WHERE token=? AND player=?",(token,player)).fetchone()
+    if not row or float(row["expires_at"] or 0)<now or float(row["used_at"] or 0)>0: conn.close(); return None
+    cur=conn.execute("UPDATE senplayer_tickets SET used_at=? WHERE token=? AND used_at=0",(now,token)); conn.commit(); conn.close()
+    return dict(row) if cur.rowcount==1 else None
+
+async def process_bot_callback(token: str, bot_info: dict, q: dict):
+    qid=str(q.get("id") or ""); user=q.get("from") or {}; uid=int(user.get("id") or 0); data=str(q.get("data") or ""); bot_id=str(bot_info.get("id") or "")
+    if not uid: return
+    if data.startswith("ep:"):
+        await bot_answer_callback(token,qid,"Emby 按钮已移除，请使用 SenPlayer 播放",True)
+        return
+    if data=="bm:bind":
+        await bot_answer_callback(token,qid); await bot_delete_callback_message(token,q); await bot_choose_server(token,uid,bot_id,"bind"); return
+    if data=="bm:unbind":
+        await bot_answer_callback(token,qid); await bot_delete_callback_message(token,q); await bot_choose_server(token,uid,bot_id,"unbind"); return
+    if data=="bm:status":
+        await bot_answer_callback(token,qid); await bot_delete_callback_message(token,q); await bot_show_status(token,uid,bot_id); return
+    m=re.fullmatch(r"bm:(bind|unbind)srv:(\d+)",data)
+    if m:
+        await bot_answer_callback(token,qid); await bot_delete_callback_message(token,q); action=m.group(1); sid=int(m.group(2)); s=get_server(sid)
+        if not s: return
+        if action=="bind":
+            set_bind_state(bot_id,uid,"await_username",sid,"")
+            qmsg=q.get("message") or {}
+            track_bind_message(bot_id,uid,qmsg.get("message_id"))
+            sent=await bot_send(token,uid,f"正在绑定 <b>{html.escape(s['name'])}</b>\n\n第一步：请发送你的 <b>Emby 账号</b>。")
+            if isinstance(sent,dict): track_bind_message(bot_id,uid,sent.get("message_id"))
+        else:
+            conn=db(); cur=conn.execute("DELETE FROM tg_bindings WHERE server_id=? AND tg_user_id=?",(sid,uid)); conn.commit(); conn.close(); await bot_send(token,uid,f"已取消 <b>{html.escape(s['name'])}</b> 的绑定。" if cur.rowcount else "这个服务器目前没有你的绑定。")
+        return
+    m=re.fullmatch(r"(sp|pp):(\d+):([^:]+):([0-9a-f]{10})",data)
+    if not m: return
+    player=m.group(1); sid=int(m.group(2)); item_id=m.group(3); sig=m.group(4); srow=get_server(sid)
+    if not srow or not hmac.compare_digest(_binding_callback_sig(dict(srow),item_id),sig):
+        await bot_answer_callback(token,qid,"播放链接无效或已失效",True); return
+    server=dict(srow); binding=get_tg_binding(sid,uid)
+    if not int(server.get("tg_binding_enabled") or 0) or binding_bot_token_for_server(server) != token:
+        await bot_answer_callback(token,qid,"播放入口已关闭或机器人不匹配",True); return
+    if not binding:
+        username=str(bot_info.get("username") or "")
+        deep=f"https://t.me/{username}?start=bind_{sid}" if username else ""
+        await bot_answer_callback(token,qid,"请先绑定你的 Emby 账号",True,deep)
+        return
+    public_base=normalize_url(server.get("notifier_public_url") or "")
+    if not public_base:
+        await bot_answer_callback(token,qid,"管理员尚未设置通知程序公网地址",True); return
+    if player == "pp":
+        try:
+            await pot_sync.live_scope(sid, uid)
+        except Exception:
+            await bot_answer_callback(token,qid,"无法核验绑定的 Emby 用户（用户停用、已删除或服务器暂不可用），未启动播放。",True)
+            return
+        delivery = pot_sync.dispatch(server, uid, item_id)
+        if delivery != 'offline':
+            await bot_answer_callback(token,qid,"已发送到配对电脑，启动后同步 Emby 进度。" if delivery=='sent' else "电脑正在播放或启动中，请先关闭当前播放。",True)
+            return
+    ticket=create_senplayer_ticket(sid,item_id,uid,300,player=player)
+    player_name="PotPlayer" if player=="pp" else "SenPlayer"
+    play_url=f"{public_base}/{'ps' if player == 'pp' else 'sp'}/{ticket}"
+    markup={"inline_keyboard":[[{"text":f"▶️ 打开 {player_name}","url":play_url}]]}
+    if player == "pp":
+        markup["inline_keyboard"].append([{
+            "text":"首次加载 PotPlayer 插件（JAV频道点播）",
+            "url":f"{public_base}/downloads/potplayer-browser-launcher.zip",
+        }])
+    install_note = ("\n\n请先安装新版 Windows 同步组件（旧版需重装）。"
+                    "\n方法1：浏览器跳转，不常驻，仅播放期间同步。"
+                    "\n方法2：后台常驻，私聊发送 /pc 配对后可直接播放。"
+                    "\n两种方法都同步 Emby 续播进度和播放记录。"
+                    "\n未配对或电脑离线时使用下方浏览器入口；约10秒删除。") if player == "pp" else ""
+    try:
+        sent = await bot_send(token,uid,f"🎬 已按 Emby 用户 <b>{html.escape(binding['emby_username'])}</b> 准备播放。\n点击下面按钮打开 {player_name}：{install_note}",markup)
+        if isinstance(sent, dict):
+            play_chat_id = sent.get("chat", {}).get("id", uid)
+            play_message_id = sent.get("message_id", 0)
+            attach_senplayer_ticket_message(ticket, play_chat_id, play_message_id)
+            bot_delete_message_later(token, play_chat_id, play_message_id, 10)
+        await bot_answer_callback(token,qid,"已发送到机器人私聊")
+    except Exception:
+        username=str(bot_info.get("username") or "")
+        deep=f"https://t.me/{username}?start=bind_{sid}" if username else ""
+        await bot_answer_callback(token,qid,"请先私聊机器人 /start",True,deep)
+
+async def telegram_bot_poller(token: str):
+    info=await bot_api(token,"getMe")
+    bot_id=str(info.get("id") or "")
+    try:
+        await bot_api(token,"setMyCommands",{"commands":json.dumps([
+            {"command":"start","description":"打开绑定菜单"},{"command":"bind","description":"绑定 Emby 账号"},{"command":"unbind","description":"取消绑定"},{"command":"status","description":"查看我的绑定"},{"command":"cancel","description":"取消当前操作"},
+            {"command":"pc","description":"JAV频道点播电脑配对"},{"command":"pc_off","description":"撤销电脑直达配对"}
+        ],ensure_ascii=False)})
+    except Exception: pass
+    conn=db(); row=conn.execute("SELECT next_offset FROM tg_bot_offsets WHERE bot_id=?",(bot_id,)).fetchone(); offset=int(row["next_offset"] if row else 0); conn.close()
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=40) as c:
+                r=await c.get(f"https://api.telegram.org/bot{token}/getUpdates",params={"timeout":25,"offset":offset,"allowed_updates":json.dumps(["message","callback_query"])})
+                r.raise_for_status(); j=r.json()
+            if not j.get("ok"): raise RuntimeError(str(j))
+            for upd in j.get("result") or []:
+                offset=max(offset,int(upd.get("update_id") or 0)+1)
+                try:
+                    if upd.get("message"): await process_bot_message(token,info,upd["message"])
+                    elif upd.get("callback_query"): await process_bot_callback(token,info,upd["callback_query"])
+                except Exception as e:
+                    print(f"[TG binding] update error: {e}")
+            conn=db(); conn.execute("INSERT INTO tg_bot_offsets(bot_id,next_offset) VALUES(?,?) ON CONFLICT(bot_id) DO UPDATE SET next_offset=excluded.next_offset",(bot_id,offset)); conn.commit(); conn.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[TG binding] poller error bot={bot_id}: {e}")
+            await asyncio.sleep(5)
+
+async def telegram_binding_manager():
+    while True:
+        wanted={}
+        conn=db(); rows=conn.execute("SELECT * FROM servers WHERE tg_binding_enabled=1").fetchall(); conn.close()
+        for r in rows:
+            s=dict(r); token=binding_bot_token_for_server(s)
+            if token: wanted[token]=True
+        for token in list(wanted):
+            key=hashlib.sha256(token.encode()).hexdigest()[:16]
+            if key not in BOT_POLLER_TASKS or BOT_POLLER_TASKS[key].done():
+                BOT_POLLER_TASKS[key]=asyncio.create_task(telegram_bot_poller(token))
+        for key,task in list(BOT_POLLER_TASKS.items()):
+            if task.done(): BOT_POLLER_TASKS.pop(key,None)
+        await asyncio.sleep(15)
+
+
 def extract_event_and_item(payload):
     event = (
         payload.get("Event")
@@ -1243,12 +2449,16 @@ def extract_event_and_item(payload):
 
 
 @app.on_event("startup")
-def startup():
+async def startup():
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     init_db()
+    pot_sync.init_db()
     # Best-effort: on every container start/recreate, automatically reconnect
     # the notifier itself to emby-notify-net. No SSH command is required.
     ensure_local_network()
+    asyncio.create_task(tv_batch_worker())
+    asyncio.create_task(telegram_binding_manager())
+    spawn_background(telegram_cleanup_worker())
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -1325,7 +2535,7 @@ async def home(request: Request, server_id: Optional[int] = None, msg: str = "")
     webhook_local_url = local_webhook_url(dict(server))
     local_emby_containers = detect_local_emby_containers()
 
-    return templates.TemplateResponse("index.html", {
+    return templates.TemplateResponse("console.html", {
         "request": request,
         "servers": servers,
         "server": server,
@@ -1336,6 +2546,7 @@ async def home(request: Request, server_id: Optional[int] = None, msg: str = "")
         "webhook_local_url": webhook_local_url,
         "local_emby_containers": local_emby_containers,
         "webhook_status": webhook_status,
+        "detected_public_base": external_base_url(request),
         "msg": msg
     })
 
@@ -1387,14 +2598,25 @@ async def save_server(
     emby_url: str = Form(...),
     emby_api_key: str = Form(...),
     bot_token_override: str = Form(""),
-    send_test_to_telegram: Optional[str] = Form(None)
+    send_test_to_telegram: Optional[str] = Form(None),
+    senplayer_emby_url: str = Form(""),
+    notifier_public_url: str = Form(""),
+    senplayer_user: str = Form(""),
+    tv_batch_minutes: int = Form(30),
+    tg_binding_enabled: Optional[str] = Form(None),
+    tg_binding_bot_id: str = Form(""),
+    tg_binding_bot_token: str = Form(""),
+    tg_binding_admin_ids: str = Form(""),
+    senplayer_progress_sync: Optional[str] = Form(None)
 ):
     require_login(request)
     clean_name = name.strip()
     conn = db()
     conn.execute("""
       UPDATE servers
-      SET name=?, emby_url=?, emby_api_key=?, bot_token_override=?, send_test_to_telegram=?
+      SET name=?, emby_url=?, emby_api_key=?, bot_token_override=?, send_test_to_telegram=?,
+          senplayer_emby_url=?, notifier_public_url=?, senplayer_user=?, tv_batch_minutes=?,
+          tg_binding_enabled=?, tg_binding_bot_id=?, tg_binding_bot_token=?, tg_binding_admin_ids=?, senplayer_progress_sync=?
       WHERE id=?
     """, (
         clean_name,
@@ -1402,6 +2624,15 @@ async def save_server(
         emby_api_key.strip(),
         bot_token_override.strip(),
         1 if send_test_to_telegram else 0,
+        normalize_url(senplayer_emby_url) if senplayer_emby_url.strip() else "",
+        normalize_url(notifier_public_url) if notifier_public_url.strip() else "",
+        senplayer_user.strip(),
+        max(1, min(1440, int(tv_batch_minutes or 30))),
+        1 if tg_binding_enabled else 0,
+        re.sub(r"\D", "", tg_binding_bot_id or ""),
+        tg_binding_bot_token.strip(),
+        tg_binding_admin_ids.strip(),
+        1 if senplayer_progress_sync else 0,
         server_id
     ))
     conn.commit()
@@ -1420,6 +2651,7 @@ async def delete_server(request: Request, server_id: int):
     conn = db()
     conn.execute("DELETE FROM routes WHERE server_id=?", (server_id,))
     conn.execute("DELETE FROM libraries WHERE server_id=?", (server_id,))
+    conn.execute("DELETE FROM tg_bindings WHERE server_id=?", (server_id,))
     conn.execute("DELETE FROM servers WHERE id=?", (server_id,))
     conn.commit()
     conn.close()
@@ -1438,10 +2670,10 @@ async def rotate_webhook(request: Request, server_id: int):
 
 
 @app.post("/settings/bot")
-async def save_global_bot(request: Request, global_bot_token: str = Form("")):
+async def save_global_bot(request: Request, global_bot_token: str = Form(""), binding_admin_ids: str = Form("")):
     require_login(request)
     conn = db()
-    conn.execute("UPDATE app_settings SET global_bot_token=? WHERE id=1", (global_bot_token.strip(),))
+    conn.execute("UPDATE app_settings SET global_bot_token=?, binding_admin_ids=? WHERE id=1", (global_bot_token.strip(), binding_admin_ids.strip()))
     conn.commit()
     conn.close()
     sid_raw = request.query_params.get("server_id", "")
@@ -1579,6 +2811,23 @@ async def test_tg(request: Request, server_id: int, chat_id: str = Form(...)):
     except Exception as e:
         msg = f"Telegram 测试失败：{e}"
     return RedirectResponse(f"/?server_id={server_id}&msg={msg}", status_code=303)
+
+
+def notification_error_summary(error):
+    if isinstance(error, httpx.HTTPStatusError):
+        try:
+            description = str(error.response.json().get("description") or "")
+        except Exception:
+            description = ""
+        if "chat not found" in description.lower():
+            return "Telegram 找不到频道：检查频道 ID，并将当前通知机器人加入频道、授予发布消息权限"
+        if error.response.status_code == 403:
+            return "Telegram 拒绝发送：检查机器人是否被移除或缺少频道发布权限"
+        return f"通知接口返回 HTTP {error.response.status_code}，请检查服务配置"
+    if isinstance(error, httpx.TimeoutException):
+        return "通知请求超时，请检查网络连接"
+    # Exception strings may contain authenticated URLs. Never expose them in the panel.
+    return f"通知发送失败（{type(error).__name__}），请检查服务连接和配置"
 
 
 @app.post("/webhook/emby/{server_id}/{token}")
@@ -1725,18 +2974,28 @@ async def webhook(server_id: int, token: str, request: Request):
     sent_count = 0
     for r in routes:
         try:
-            await tg_send(server, r["chat_id"], item)
+            sent = await tg_send(server, r["chat_id"], item)
+            if str((sent.get("item") or {}).get("Type") or "").lower() == "episode":
+                record_tv_batch(server, dict(r), sent)
             sent_count += 1
             results.append({"route": r["id"], "ok": True})
         except Exception as e:
-            results.append({"route": r["id"], "ok": False, "error": str(e)})
+            reason = notification_error_summary(e)
+            results.append({"route": r["id"], "ok": False, "error": reason})
+            print(f"[notification failed] server={server_id} route={r['id']}: {reason}")
 
+    failures = [r for r in results if not r["ok"]]
+    detail = f"入库事件处理完成，匹配媒体库 {library_id}，Telegram 成功发送 {sent_count} 个任务"
+    if not routes:
+        detail += "；该媒体库没有启用的通知任务"
+    if failures:
+        detail += "；" + "；".join(f"任务 {r['route']}：{r['error']}" for r in failures)
     update_webhook_status(
         server_id,
         event,
         source_name=source_name,
         telegram_count=sent_count,
-        detail=f"入库事件处理完成，匹配媒体库 {library_id}，Telegram 成功发送 {sent_count} 个任务"
+        detail=detail
     )
 
     return {
@@ -1762,6 +3021,216 @@ async def webhook_status_api(request: Request, server_id: int):
     return {"ok": True, "status": dict(row)}
 
 
+@app.get("/ep/{token}")
+@app.get("/emby-open/{server_id}/{item_id}/{sig}")
+async def retired_emby_launch():
+    raise HTTPException(status_code=410, detail="Emby 播放入口已移除，请使用 SenPlayer")
+
+
+@app.get("/sp/{token}")
+async def senplayer_ticket_open(token: str):
+    return await player_ticket_open(token, "sp")
+
+
+@app.get("/downloads/potplayer-browser-launcher.zip")
+async def potplayer_installer_download():
+    package = Path(__file__).resolve().parent / "downloads" / "potplayer-browser-launcher.zip"
+    if not package.is_file():
+        raise HTTPException(status_code=404, detail="安装包暂不可用，请联系管理员")
+    return FileResponse(package, media_type="application/zip", filename="JAV频道点播-v15.7.zip",
+                        headers={"Cache-Control":"no-store", "X-Content-Type-Options":"nosniff"})
+
+
+@app.get("/pp/{token}")
+async def potplayer_ticket_open(token: str):
+    return await player_ticket_open(token, "pp")
+
+
+async def player_ticket_open(token: str, player: str):
+    ticket=consume_senplayer_ticket(token,player)
+    if not ticket: return HTMLResponse("<h3>❌ 播放凭证已失效或已使用，请回 Telegram 频道重新点击播放。</h3>",status_code=403)
+    srow=get_server(int(ticket["server_id"])); server=dict(srow) if srow else None
+    if not server: raise HTTPException(status_code=404)
+    if player == "pp" and not int(server.get("tg_binding_enabled") or 0):
+        raise HTTPException(status_code=403,detail="播放入口已关闭")
+    binding=get_tg_binding(int(ticket["server_id"]),int(ticket["tg_user_id"]))
+    if not binding: return HTMLResponse("<h3>❌ 当前 Telegram 用户未绑定 Emby，无法播放。</h3>",status_code=403)
+    # The private one-time player message is only an intermediate step.
+    # Queue deletion when opened; Telegram network requests run in the worker.
+    tg_chat_id=str(ticket.get("tg_chat_id") or "")
+    tg_message_id=int(ticket.get("tg_message_id") or 0)
+    if tg_chat_id and tg_message_id:
+        bot_delete_message_later(binding_bot_token_for_server(server), tg_chat_id, tg_message_id, 0)
+    item_id=str(ticket["item_id"]); emby_base=normalize_url(server.get("senplayer_emby_url") or server.get("emby_url") or ""); api_key=str(server.get("emby_api_key") or "").strip()
+    if not emby_base or not api_key: raise HTTPException(status_code=503,detail="播放器 Emby 地址或 API Key 未配置")
+    media_url=f"{emby_base}/emby/Videos/{quote(item_id,safe='')}/stream?Static=true&api_key={quote(api_key,safe='')}"
+    if player == "pp":
+        if urlsplit(emby_base).scheme not in {"http", "https"} or not urlsplit(emby_base).hostname:
+            raise HTTPException(status_code=503,detail="PotPlayer 播放地址必须为 HTTP 或 HTTPS")
+        # Our per-user Windows handler decodes one URL, without shell evaluation.
+        payload=base64.urlsafe_b64encode(media_url.encode("utf-8")).decode("ascii").rstrip("=")
+        return RedirectResponse("hdz-potplayer://play/"+payload,status_code=302,
+                                headers={"Cache-Control":"no-store","Referrer-Policy":"no-referrer"})
+    params=["url="+quote(media_url,safe="")]
+    resume=await _senplayer_resume_seconds(server,binding["emby_user_id"],item_id)
+    if resume>0: params.append(f"position={resume}")
+    if int(server.get("senplayer_progress_sync") or 0):
+        public_base=normalize_url(server.get("notifier_public_url") or ""); psig=_binding_play_sig(server,item_id,int(ticket["tg_user_id"]))
+        if public_base:
+            cb=f"{public_base}/senplayer-user-callback/{ticket['server_id']}/{quote(item_id,safe='')}/{ticket['tg_user_id']}/{psig}"; params.append("x-success="+quote(cb,safe=""))
+    return RedirectResponse("SenPlayer://x-callback-url/play?"+"&".join(params),status_code=302)
+
+@app.get("/senplayer-user/{server_id}/{item_id}/{tg_user_id}/{sig}")
+async def senplayer_user_open(server_id: int, item_id: str, tg_user_id: int, sig: str):
+    srow=get_server(server_id)
+    if not srow: raise HTTPException(status_code=404)
+    server=dict(srow)
+    if not _verify_binding_play_sig(server,item_id,tg_user_id,sig): raise HTTPException(status_code=404)
+    binding=get_tg_binding(server_id,tg_user_id)
+    if not binding: raise HTTPException(status_code=403, detail="Telegram 用户尚未绑定 Emby")
+    public_base=normalize_url(server.get("notifier_public_url") or "")
+    if not public_base: raise HTTPException(status_code=400,detail="未设置通知程序公网地址")
+    media_sig=_senplayer_signature(server,item_id)
+    media_url=f"{public_base}/senplayer-media/{server_id}/{quote(item_id,safe='')}/{media_sig}"
+    params=["url="+quote(media_url,safe="")]
+    resume=await _senplayer_resume_seconds(server,binding["emby_user_id"],item_id)
+    if resume>0: params.append(f"position={resume}")
+    if int(server.get("senplayer_progress_sync") or 0):
+        cb=f"{public_base}/senplayer-user-callback/{server_id}/{quote(item_id,safe='')}/{tg_user_id}/{sig}"
+        params.append("x-success="+quote(cb,safe=""))
+    return RedirectResponse("SenPlayer://x-callback-url/play?"+"&".join(params),status_code=302)
+
+def callback_position(query) -> int:
+    for key in ("position", "time", "currentTime", "playbackTime", "progress"):
+        raw = query.get(key)
+        if raw is not None and raw != "":
+            try:
+                value = float(raw)
+                if math.isfinite(value) and value >= 0 and value <= 922337203685:
+                    return int(value)
+            except (TypeError, ValueError, OverflowError):
+                pass
+            break
+    raise HTTPException(status_code=400, detail="缺少有效播放位置，已有进度未修改")
+
+@app.get("/senplayer-user-callback/{server_id}/{item_id}/{tg_user_id}/{sig}")
+async def senplayer_user_callback(server_id: int, item_id: str, tg_user_id: int, sig: str, request: Request):
+    srow=get_server(server_id)
+    if not srow: raise HTTPException(status_code=404)
+    server=dict(srow)
+    if not _verify_binding_play_sig(server,item_id,tg_user_id,sig): raise HTTPException(status_code=404)
+    if not int(server.get("senplayer_progress_sync") or 0):
+        return HTMLResponse(status_code=204)
+    binding=get_tg_binding(server_id,tg_user_id)
+    if not binding: return HTMLResponse("<h3>绑定已取消，无法同步进度。</h3>",status_code=403)
+    q=request.query_params
+    dur=q.get("duration") or "0"; status=(q.get("status") or "").lower()
+    pos=callback_position(q)
+    try: duration=max(0,int(float(dur)))
+    except Exception: duration=0
+    finished=status in {"finished","completed","complete","ended"} or (duration>0 and pos/duration>=0.90)
+    ok=await _update_emby_resume(server,binding["emby_user_id"],item_id,pos,finished=finished)
+    if ok:
+        txt="已同步并标记为已播放" if finished else "播放进度已同步"
+        return HTMLResponse(f"<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1'><body style='font-family:-apple-system;padding:32px;background:#0b1320;color:#fff'><h3>✅ {html.escape(txt)}</h3><p>Emby 用户：{html.escape(binding['emby_username'])}</p><p>位置：{pos} 秒</p><script>setTimeout(()=>history.back(),700)</script></body>")
+    return HTMLResponse("<h3>⚠️ SenPlayer 已返回进度，但写入 Emby 失败。</h3>",status_code=502)
+
+
+@app.get("/senplayer/{server_id}/{item_id}/{sig}")
+async def senplayer_open(server_id: int, item_id: str, sig: str):
+    server_row = get_server(server_id)
+    if not server_row:
+        raise HTTPException(status_code=404)
+    server = dict(server_row)
+    if not _verify_senplayer_signature(server, item_id, sig):
+        raise HTTPException(status_code=404)
+
+    public_base = normalize_url(server.get("notifier_public_url") or "")
+    if not public_base:
+        raise HTTPException(status_code=400, detail="未设置通知程序公网地址")
+
+    media_url = f"{public_base}/senplayer-media/{server_id}/{item_id}/{sig}"
+    params = ["url=" + quote(media_url, safe="")]
+
+    # SenPlayer 6.1.1+ supports resume position and returning current time on exit.
+    sp_user = await _resolve_senplayer_user(server)
+    if sp_user:
+        resume = await _senplayer_resume_seconds(server, sp_user["Id"], item_id)
+        if resume > 0:
+            params.append(f"position={resume}")
+        if int(server.get("senplayer_progress_sync") or 0):
+            cb = f"{public_base}/senplayer-callback/{server_id}/{item_id}/{sig}"
+            params.append("x-success=" + quote(cb, safe=""))
+
+    scheme = "SenPlayer://x-callback-url/play?" + "&".join(params)
+    return RedirectResponse(scheme, status_code=302)
+
+
+@app.get("/senplayer-callback/{server_id}/{item_id}/{sig}")
+async def senplayer_callback(server_id: int, item_id: str, sig: str, request: Request):
+    server_row = get_server(server_id)
+    if not server_row:
+        raise HTTPException(status_code=404)
+    server = dict(server_row)
+    if not _verify_senplayer_signature(server, item_id, sig):
+        raise HTTPException(status_code=404)
+    if not int(server.get("senplayer_progress_sync") or 0):
+        return HTMLResponse(status_code=204)
+
+    sp_user = await _resolve_senplayer_user(server)
+    if not sp_user:
+        return HTMLResponse("<h3>SenPlayer 已退出，但未配置 Emby 进度同步用户。</h3>")
+
+    q = request.query_params
+    raw_duration = q.get("duration") or "0"
+    status = (q.get("status") or "").lower()
+    position = callback_position(q)
+    try:
+        duration = max(0, int(float(raw_duration)))
+    except Exception:
+        duration = 0
+
+    finished = status in {"finished", "completed", "complete", "ended"}
+    if not finished and duration > 0 and position / duration >= 0.90:
+        finished = True
+
+    ok = await _update_emby_resume(server, sp_user["Id"], item_id, position, finished=finished)
+    if ok:
+        text = "已同步到 Emby，并标记为已播放" if finished else "播放进度已同步到 Emby"
+        body = (
+            "<!doctype html><html><meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<body style='font-family:-apple-system;padding:32px;background:#0b1320;color:#fff'>"
+            f"<h3>✅ {html.escape(text)}</h3>"
+            f"<p>用户：{html.escape(sp_user['Name'])}</p>"
+            f"<p>位置：{position} 秒</p>"
+            "<script>setTimeout(()=>history.back(),800)</script></body></html>"
+        )
+        return HTMLResponse(body)
+    return HTMLResponse("<h3>⚠️ SenPlayer 已返回进度，但写入 Emby 失败。</h3>", status_code=502)
+
+
+@app.get("/senplayer-media/{server_id}/{item_id}/{sig}")
+async def senplayer_media(server_id: int, item_id: str, sig: str):
+    server_row = get_server(server_id)
+    if not server_row:
+        raise HTTPException(status_code=404)
+    server = dict(server_row)
+    if not _verify_senplayer_signature(server, item_id, sig):
+        raise HTTPException(status_code=404)
+
+    emby_base = normalize_url(server.get("senplayer_emby_url") or server.get("emby_url") or "")
+    api_key = str(server.get("emby_api_key") or "").strip()
+    if not emby_base or not api_key:
+        raise HTTPException(status_code=503, detail="SenPlayer Emby 地址或 API Key 未配置")
+
+    target = f"{emby_base}/emby/Videos/{quote(item_id, safe='')}/stream?Static=true&api_key={quote(api_key, safe='')}"
+    return RedirectResponse(target, status_code=307)
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+from app.potplayer_sync import PotPlayerSync
+pot_sync = PotPlayerSync(app, globals())

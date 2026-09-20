@@ -9,6 +9,7 @@
 - Emby STRM 图片和元素补齐监控自动补齐多版本 STRM 缺失封面，并触发缺失 NFO/背景图/简介的项目重新刮削；
 - Emby STRM 中文标题、简介等修正监控按中文文件夹名修正残留英文标题，并触发英文简介重新刮削；
 - Rclone 网页控制台把另一团队盘中的 STRM/NFO/图片单向增量同步到本地；
+- 可选安装 Emby Telegram 入库通知与 JAV 频道点播控制台；
 - 神医助手在用户自行安装和授权后应用已验证的播放相关设置。
 
 仓库只包含安装代码和无密码优化模板，不包含影片、STRM、NFO、封面、账号、
@@ -60,6 +61,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | Emby STRM 中文标题、简介等修正监控 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 默认安装为 systemd timer，备份数据库后修正残留英文标题并刷新中文简介 |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
 | Rclone 同步控制台 | Debian/Ubuntu 的 `rclone`、`python3-flask` | 本仓库网页服务，端口 6096 |
+| Emby Telegram 通知 | 本仓库 `compose/emby-tg-notifier` | v15.8 控制台，支持 Movie/TV/JAV 通知、TG 用户绑定、SenPlayer/PotPlayer 点播 |
 
 固定摘要是为了避免 `latest` 更新后配置或插件突然不兼容。
 
@@ -112,6 +114,23 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 7. 在 6096 控制台上传 `rclone.conf`，选择备份团队盘目录和本地目标目录。
 
 账号、OAuth、License 不能写进 GitHub，即使仓库是私有的。
+
+## Emby Telegram 入库通知
+
+通知程序是可选组件，不会由基础安装向导自动启用。安装命令：
+
+```bash
+sudo ./scripts/install-emby-tg-notifier.sh
+```
+
+默认监听 `8787`，数据保存在
+`/root/docker-compose/emby-tg-notifier/data`。当前仓库内置 v15.8 控制台和
+v15.7 Windows 点播组件，支持 Movie、TV、JAV 分类通知、TG 用户绑定 Emby、
+SenPlayer/PotPlayer 点播及播放进度同步。
+
+JAV 简介会清理 NFO 中的 `<br>` 等 HTML 标签并保留正常段落；通知触发早于
+Emby 海报生成时，会优先读取 STRM 同目录的 `poster.jpg`，随后再重试 Emby 图片
+接口，避免通知退化为纯文字。
 
 ## 全新安装
 

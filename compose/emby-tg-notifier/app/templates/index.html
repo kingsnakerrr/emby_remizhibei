@@ -309,9 +309,61 @@ document.addEventListener('DOMContentLoaded',()=>{
     通知程序每次启动/重建时都会自动重新加入 <b>emby-notify-net</b>；已存在的 Emby 容器只需首次点击“一键连接本机 Emby”。
   </div>
 </div>
+
+<div style="margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#101a28">
+  <div style="font-weight:700;margin-bottom:6px">SenPlayer 跳转（实验）</div>
+  <div class="muted">Telegram 的“▶️ SenPlayer 播放”会先打开通知程序，再唤起 iOS SenPlayer。无需填写 SenPlayer 用户名或密码。</div>
+
+  <label style="margin-top:10px">SenPlayer 使用的 Emby 外网地址</label>
+  <input name="senplayer_emby_url" value="{{server['senplayer_emby_url'] or server['emby_url']}}" placeholder="例如 http://hdz.222321.xyz:8096">
+  <div class="muted" style="margin-top:4px">如果上面的 Emby 地址是 http://emby:8096 这种 Docker 内网地址，这里请改成 iPhone 能访问的公网 IP / 域名地址。</div>
+
+  <label style="margin-top:10px">通知程序公网地址</label>
+  <input name="notifier_public_url" value="{{server['notifier_public_url'] or detected_public_base}}" placeholder="例如 http://hdz.222321.xyz:8787">
+  <div class="muted" style="margin-top:4px">用于 Telegram 播放按钮。当前页面检测到：<b>{{detected_public_base}}</b>。可以手动修改。</div>
+
+  <input type="hidden" name="senplayer_user" value="{{server['senplayer_user'] or ''}}">
+  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;color:var(--txt)">
+    <input type="checkbox" name="senplayer_progress_sync" value="1" {% if server['senplayer_progress_sync'] %}checked{% endif %} style="width:auto">
+    退出时回写 SenPlayer 播放进度（可能唤起 Safari，默认关闭）
+  </label>
+  <div class="muted" style="margin-top:4px">v15.1：关闭时所有播放入口均不添加退出回调，仍读取 Emby 已有进度续播，但不回写本次退出位置。开启后按对应 Emby 账号回写，退出时可能打开浏览器。</div>
+
+  <div style="margin-top:14px;padding:12px;border:1px solid var(--line);border-radius:10px;background:#0d1724">
+    <div style="font-weight:700">TG 用户绑定 Emby（推荐）</div>
+    <div class="muted" style="margin-top:5px">启用后，用户私聊绑定机器人发送 <b>/start</b> 即可打开绑定菜单。</div>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:12px;color:var(--txt)">
+      <input type="checkbox" name="tg_binding_enabled" value="1" {% if server['tg_binding_enabled'] %}checked{% endif %} style="width:auto">
+      启用 TG 用户绑定 / 播放鉴权
+    </label>
+
+    <label style="margin-top:12px">绑定 Emby 机器人 Token（可选）</label>
+    <input type="password" name="tg_binding_bot_token" value="{{server['tg_binding_bot_token'] or ''}}" autocomplete="off" placeholder="留空 = 使用本服务器当前的通知 Bot">
+    <div class="muted" style="margin-top:4px">留空时，绑定功能直接使用通知 Bot；如果填写独立 Token，为保证频道按钮能识别点击者，这只 Bot 也会同时负责本服务器的入库通知。</div>
+
+    <label style="margin-top:10px">绑定机器人管理员 Telegram ID</label>
+    <input name="tg_binding_admin_ids" value="{{server['tg_binding_admin_ids'] or ''}}" placeholder="例如 123456789；多个管理员用逗号分隔">
+    <div class="muted" style="margin-top:4px">用于识别管理员和以后扩展管理命令。管理员同样使用 <b>/start</b> 绑定自己的 Emby；管理员可用 <b>/bindings</b> 查看最近绑定。</div>
+    <input type="hidden" name="tg_binding_bot_id" value="">
+  </div>
+
+<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+  <div style="font-weight:700;margin-bottom:6px">电视剧剧集批量入库合并</div>
+  <div class="muted">仅针对 TVshow 的 Episode。单集照常保留；同一部剧同一季连续入库多集时，先逐集通知，静默超过设定时间后自动删除本批单集通知，再发送一条新的合并通知。</div>
+  <label style="margin-top:10px">批量入库静默判断时间（分钟）</label>
+  <input type="number" min="1" max="1440" name="tv_batch_minutes" value="{{server['tv_batch_minutes'] or 30}}">
+  <div class="muted" style="margin-top:4px">默认 30 分钟。每新增一集会重新计时；只有 1 集时不会删除或重发。Movie 和 JAV 完全不受影响。</div>
+</div>
+
+  <div class="muted" style="margin-top:8px">
+    当前使用 SenPlayer URL Scheme：<code>SenPlayer://x-callback-url/play?url=...</code>。播放进度同步默认关闭；只有开启上方开关时才会传入续播位置并在退出时回写 Emby。
+    Telegram 按钮本身不会包含 Emby API Key。
+  </div>
+</div>
+
 <label>Emby API Key</label><input name="emby_api_key" value="{{server['emby_api_key']}}">
 <label>此服务器单独使用的 Telegram Bot Token（可选）</label>
-<input name="bot_token_override" value="{{server['bot_token_override']}}" placeholder="留空 = 使用右侧默认通知 Bot">
+<input name="bot_token_override" type="password" value="{{server['bot_token_override']}}" autocomplete="off" placeholder="留空 = 使用右侧默认通知 Bot">
 <div class="muted" style="margin-top:6px">如果这台 Emby 想用另一只机器人，就在这里填；留空则使用默认 Bot。</div>
 <label style="display:flex;align-items:center;gap:8px;margin-top:14px;color:var(--txt)">
   <input type="checkbox" name="send_test_to_telegram" value="1"
@@ -330,7 +382,8 @@ document.addEventListener('DOMContentLoaded',()=>{
 <h3>通知 Telegram Bot</h3>
 <div class="muted">这是默认 Bot。所有服务器均可使用；某台服务器如果填写了自己的 Bot Token，则优先使用自己的。</div>
 <form method="post" action="/settings/bot?server_id={{server['id']}}" data-ajax-save="1">
-<label>默认 Telegram Bot Token</label><input name="global_bot_token" value="{{settings['global_bot_token']}}">
+<label>默认通知 Telegram Bot Token</label><input name="global_bot_token" type="password" value="{{settings['global_bot_token']}}" autocomplete="off">
+<input type="hidden" name="binding_admin_ids" value="{{settings['binding_admin_ids'] or ''}}">
 <div style="margin-top:12px"><button>保存通知 Bot</button></div></form>
 <hr style="border:0;border-top:1px solid var(--line);margin:18px 0">
 <form method="post" action="/settings/login" autocomplete="on" data-login-settings="1">

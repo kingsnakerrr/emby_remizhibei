@@ -1,0 +1,48 @@
+PotPlayer 浏览器跳转组件安装教程
+
+【这是什么】
+这是 TG 播放按钮配套的 Windows 浏览器跳转组件。
+机器人按钮称为“PotPlayer 插件”，实际是 Windows 协议关联工具，
+不是 Chrome / Edge 浏览器扩展，也不是 PotPlayer 播放器本体。
+安装后，浏览器可通过 hdz-potplayer:// 链接将视频地址交给 PotPlayer 播放。
+
+【无后台任务】
+不添加开机启动项，不创建计划任务，不安装后台服务，不常驻后台。
+仅点击播放时临时运行启动脚本，打开 PotPlayer 后脚本退出。
+不是“完全绕过浏览器”；浏览器首次可能询问是否允许打开外部应用。
+
+【安装步骤】
+1. 先在 Windows 电脑安装 PotPlayer 播放器。
+2. 将本 ZIP 完整解压到一个文件夹，不要直接在压缩包里运行。
+3. 双击 Install.cmd，不要只打开 Install.ps1。
+4. 工具会自动寻找已安装的 PotPlayer。
+   如果弹出文件选择窗口，请去 PotPlayer 安装目录选择：
+   PotPlayerMini64.exe（64 位）或 PotPlayerMini.exe（32 位）。
+   可右键桌面 PotPlayer 快捷方式，选择“打开文件所在的位置”查找。
+   这些 EXE 是播放器文件，不在本组件安装包内。
+5. 窗口显示 Installed for this Windows user 即表示安装成功，按任意键关闭。
+6. 返回 TG 频道重新点“PotPlayer 播放”，再到机器人私聊点“打开 PotPlayer”。
+   原播放消息约 10 秒删除，原播放凭证 5 分钟到期；安装后请重新获取。
+7. 若浏览器询问是否允许打开 HDZ PotPlayer，请确认后继续。
+   若 Windows 提示来源不可信，请先核实下载来源，不要关闭全局安全防护。
+
+【安装范围】
+只为当前 Windows 用户注册 hdz-potplayer://，不需要管理员权限。
+不替换已有 potplayer:// 关联，不修改 Emby 服务器或 data 数据。
+组件保存到 %LOCALAPPDATA%\HDZ-PotPlayer，安装后可移走解压目录。
+每台电脑或每个 Windows 用户首次需要安装一次。
+如果移动或卸载了 PotPlayer，请重新运行 Install.cmd 选择正确路径。
+
+【卸载】
+在解压目录打开 PowerShell，运行：
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Uninstall.ps1
+这会移除本组件的链接关联，不会卸载 PotPlayer。
+组件文件会保留在 %LOCALAPPDATA%\HDZ-PotPlayer，但不会后台运行。
+
+【播放与隐私说明】
+本方案是直接播放视频 URL，不是打开 PotPlayer 内的 Emby 媒体库。
+当前不回写 PotPlayer 播放进度，不附加退出回调网页。
+频道按钮和机器人文字不展示媒体直链，但浏览器跳转及播放器最终会接触
+带 Emby API Key 的视频地址，播放历史可能保存它。编码不等于加密。
+不要分享播放链接、播放器历史或截图中的完整视频地址。
+本安装包不包含你的 Emby 地址、账号、Token 或服务器密码。

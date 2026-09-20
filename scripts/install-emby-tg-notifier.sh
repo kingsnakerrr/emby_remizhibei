@@ -19,14 +19,14 @@ if [[ ! -f "${SOURCE}/docker-compose.yml" ]]; then
   exit 1
 fi
 
-install -d -m 0755 "${TARGET}" "${TARGET}/app" "${TARGET}/app/templates" "${TARGET}/data"
+install -d -m 0755 "${TARGET}" "${TARGET}/app" "${TARGET}/data"
 install -m 0644 "${SOURCE}/docker-compose.yml" "${TARGET}/docker-compose.yml"
 install -m 0644 "${SOURCE}/Dockerfile" "${TARGET}/Dockerfile"
 install -m 0644 "${SOURCE}/requirements.txt" "${TARGET}/requirements.txt"
 install -m 0644 "${SOURCE}/README.md" "${TARGET}/README.md"
-install -m 0644 "${SOURCE}/app/main.py" "${TARGET}/app/main.py"
-install -m 0644 "${SOURCE}/app/templates/index.html" "${TARGET}/app/templates/index.html"
-install -m 0644 "${SOURCE}/app/templates/login.html" "${TARGET}/app/templates/login.html"
+cp -a "${SOURCE}/app/." "${TARGET}/app/"
+find "${TARGET}/app" -type d -exec chmod 0755 {} +
+find "${TARGET}/app" -type f -exec chmod 0644 {} +
 
 cd "${TARGET}"
 docker compose up -d --build
