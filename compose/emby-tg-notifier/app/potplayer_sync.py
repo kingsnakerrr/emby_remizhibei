@@ -1,6 +1,5 @@
 """Scoped PotPlayer grants, paired desktop delivery, and Emby user-data sync."""
 import asyncio
-import base64
 import hashlib
 import html
 import json
@@ -12,14 +11,13 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 from fastapi import HTTPException, Request
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import JSONResponse
 
 
 class PotPlayerSync:
     def __init__(self, app, host):
         self.h = host
         self.locks = [asyncio.Lock() for _ in range(64)]
-        app.add_api_route('/ps/{ticket}', self.browser, methods=['GET'])
         app.add_api_route('/potplayer/claim/{ticket}', self.claim, methods=['POST'])
         app.add_api_route('/potplayer/report', self.report, methods=['POST'])
         app.add_api_route('/potplayer/pair/{code}', self.pair, methods=['POST'])
@@ -146,8 +144,10 @@ class PotPlayerSync:
                    (self.digest(code), sid, uid, binding['emby_user_id'], time.time()+300))
         link = base + '/potplayer/pair/' + code
         sent = await self.h['bot_send'](token, uid,
-            '方法 2 电脑配对：复制下方地址，粘贴到安装窗口。有效期 5 分钟，只能使用一次。'
+            'JAV频道点播电脑配对：复制下方地址，粘贴到安装窗口。有效期 5 分钟，只能使用一次。'
             '\n此地址相当于配对口令，请勿转发。配对后点击频道 PotPlayer 会在该电脑播放。'
+            '\n只支持后台直达，不再提供 Chrome 播放入口。'
+            '\n下载安装包：<a href="' + html.escape(base + '/downloads/potplayer-browser-launcher.zip', quote=True) + '">JAV频道点播 15.9</a>'
             '\n关闭直达：/pc_off\n<code>' + html.escape(link) + '</code>')
         if isinstance(sent, dict):
             self.h['bot_delete_message_later'](token, uid, sent.get('message_id'), 300)
@@ -225,16 +225,6 @@ class PotPlayerSync:
         key = self.digest(self.bearer(request))
         self.query('DELETE FROM pp_devices WHERE token_hash=?', (key,))
         return {'ok':True}
-
-    async def browser(self, ticket: str):
-        if not self.query("SELECT token FROM senplayer_tickets WHERE token=? AND player='pp' AND used_at=0 AND expires_at>?", (ticket, time.time())):
-            raise HTTPException(403, 'Playback link expired')
-        row = self.query('SELECT server_id FROM senplayer_tickets WHERE token=?', (ticket,))[0]
-        server = dict(self.h['get_server'](row['server_id']))
-        base = self.h['normalize_url'](server.get('notifier_public_url') or '')
-        payload = base64.urlsafe_b64encode((base+'/potplayer/claim/'+ticket).encode()).decode().rstrip('=')
-        return RedirectResponse('hdz-potplayer-sync://play/'+payload, status_code=302,
-                                headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
 
     async def claim(self, ticket: str, request: Request):
         device_hash = ''

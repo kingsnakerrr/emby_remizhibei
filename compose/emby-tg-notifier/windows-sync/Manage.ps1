@@ -3,8 +3,8 @@ param([ValidateSet('Start','Stop','Uninstall')][string]$Action='Start', [switch]
 try {
     if($Action -eq 'Start') {
         $settings=Read-Settings
-        if($settings.Mode -eq 'Resident') { Start-Resident }
-        else { Show-Notice 'Browser mode is installed. Click PotPlayer in the Telegram bot; no resident program is required.' }
+        if(-not $settings.Credential) { Show-Notice 'This computer is not paired. Run Install.cmd and use /pc in Telegram.'; exit 1 }
+        Start-Resident
         exit
     }
     $check=New-Object Threading.Mutex($false,'Local\JAVChannelPlayback')

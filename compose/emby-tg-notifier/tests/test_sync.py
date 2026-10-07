@@ -49,16 +49,11 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(r.status_code,200,r.text)
         return r.json()['token'], link
 
-    async def test_browser_does_not_consume_until_component_claims(self):
+    async def test_browser_dispatch_route_is_not_registered(self):
         ticket=m.create_senplayer_ticket(1,'42',100,player='pp')
-        for _ in range(2):
-            r=await self.client.get('/ps/'+ticket)
-            self.assertEqual(r.status_code,302)
-            self.assertTrue(r.headers['location'].startswith('hdz-potplayer-sync://'))
-            self.assertNotIn('test-key',r.headers['location'])
+        self.assertEqual((await self.client.get('/ps/'+ticket)).status_code,404)
         g=await self.grant(ticket)
         self.assertEqual(g['resume'],100)
-        self.assertEqual((await self.client.post('/potplayer/claim/'+ticket)).status_code,403)
         self.write.assert_not_awaited()
 
     async def test_progress_stop_idempotence_and_finish(self):

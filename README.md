@@ -61,7 +61,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | Emby STRM 中文标题、简介等修正监控 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 默认安装为 systemd timer，备份数据库后修正残留英文标题并刷新中文简介 |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
 | Rclone 同步控制台 | Debian/Ubuntu 的 `rclone`、`python3-flask` | 本仓库网页服务，端口 6096 |
-| Emby Telegram 通知 | 本仓库 `compose/emby-tg-notifier` | v15.8 控制台，支持 Movie/TV/JAV 通知、TG 用户绑定、SenPlayer/PotPlayer 点播 |
+| Emby Telegram 通知 | 本仓库 `compose/emby-tg-notifier` | v15.9 Windows 直达点播，支持 Movie/TV/JAV 通知、TG 用户绑定、SenPlayer/PotPlayer 点播 |
 
 固定摘要是为了避免 `latest` 更新后配置或插件突然不兼容。
 
@@ -124,9 +124,9 @@ sudo ./scripts/install-emby-tg-notifier.sh
 ```
 
 默认监听 `8787`，数据保存在
-`/root/docker-compose/emby-tg-notifier/data`。当前仓库内置 v15.8 控制台和
-v15.7 Windows 点播组件，支持 Movie、TV、JAV 分类通知、TG 用户绑定 Emby、
-SenPlayer/PotPlayer 点播及播放进度同步。
+`/root/docker-compose/emby-tg-notifier/data`。当前仓库内置 v15.9 Windows 直达点播组件，
+支持 Movie、TV、JAV 分类通知、TG 用户绑定 Emby、SenPlayer/PotPlayer 点播及播放进度同步。
+PotPlayer 不再经过 Chrome；Windows 常驻接收器由隐藏 watchdog 自动恢复。
 
 JAV 简介会清理 NFO 中的 `<br>` 等 HTML 标签并保留正常段落；通知触发早于
 Emby 海报生成时，会优先读取 STRM 同目录的 `poster.jpg`，随后再重试 Emby 图片

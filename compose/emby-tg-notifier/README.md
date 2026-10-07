@@ -1,6 +1,16 @@
-# Emby Telegram Notifier Multi v15.7 · JAV频道点播
+# Emby Telegram Notifier Multi v15.9 · JAV频道点播
 
-## v15.7（本节优先于后续历史说明）
+## v15.9（本节优先于后续历史说明）
+
+Windows PotPlayer 现在只保留“后台配对后直接播放”一种方式。频道点击播放时只向在线、已配对的电脑发送任务；电脑离线或未配对时明确提示，不再生成 Chrome/Edge 中转播放按钮。
+
+安装包只有一个 `Install.cmd`，不再区分方法1和方法2。首次安装在 Telegram 私聊发送 `/pc` 完成配对；升级会保留原配对和播放器路径。
+
+电脑端改用隐藏启动器和守护进程：Windows 登录后无 CMD 窗口运行，接收进程异常退出会在约3秒后自动重启。安装目录仍为 `%LOCALAPPDATA%\JAV-Channel-Player`。
+
+旧 `/ps`、`/pp` 浏览器播放入口不再提供 PotPlayer 播放；旧浏览器协议关联会在升级安装时删除。
+
+## v15.7（历史说明）
 
 下载包包含“方法1.浏览器打开不常驻”“方法2.安装后台常驻软件”两个文件夹，各有 Install.cmd、Uninstall.cmd 和 `运行Install.cmd安装.txt`。
 软件在Windows应用列表中显示为“JAV频道点播”，支持卸载、同方法覆盖升级保留配对、切换方法和RePair重新配对。
@@ -18,7 +28,7 @@
 进度读取接口参考：https://github.com/kjtsune/embyToLocalPlayer/blob/main/utils/players.py
 PotPlayer命令行以安装目录CmdLine64.txt为准（/new、/seek、/title）。Emby字段参考官方UserData API。
 
-验证：45项Python测试；13项Windows协议输入/语法检查；隔离注册表下安装、常驻模式安装、DPAPI、重复安装保留配对、切换方法和卸载测试通过。本机真实PotPlayer静音媒体测试验证了续播、暂停、回退；两种方法都完成真实播放器+本地HTTP接口的claim/progress/stop验证。未向真实用户的Emby写入测试观看记录。
+当前 v15.9 验证：57 项 Python 测试通过；Windows 脚本语法与不安全 URL 检查通过；本机覆盖安装保留配对、旧浏览器协议移除、隐藏 watchdog 杀进程后自动重启均已实测。未向真实用户的 Emby 写入测试观看记录。
 构建脚本包含中文目录名，请使用PowerShell 7运行；安装组件兼容Windows PowerShell 5.1。
 
 ## v15.6.1 安装包下载

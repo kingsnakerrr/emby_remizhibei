@@ -1,0 +1,13 @@
+JAV频道点播 15.9（仅后台直达模式）
+
+1. 安装 PotPlayer，并把本 ZIP 完整解压。
+2. 双击 Install.cmd；找不到播放器时选择 PotPlayerMini64.exe。
+3. 首次安装按提示到 Telegram 私聊机器人发送 /pc，复制一次性配对地址并粘贴。
+4. 安装完成后程序在系统托盘后台运行。频道点击 PotPlayer 后直接在本机播放，不经过 Chrome。
+
+程序为当前 Windows 用户添加隐藏登录启动项。后台异常退出时会自动重新启动，不应弹出 CMD 窗口。
+更新时关闭正在播放的影片，重新运行新版 Install.cmd；会保留播放器路径和原配对。
+如需重新配对请运行 RePair.cmd。卸载可运行 Uninstall.cmd 或在 Windows 设置的应用列表中操作。
+
+安装目录：%LOCALAPPDATA%\JAV-Channel-Player
+状态文件：%LOCALAPPDATA%\JAV-Channel-Player\status.txt

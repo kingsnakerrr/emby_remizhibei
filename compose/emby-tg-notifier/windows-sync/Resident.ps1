@@ -31,8 +31,9 @@ try {
             }
         } catch {
             if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -in @(401,403)) {
-                Write-State 'Pairing revoked or binding changed. Re-run Install.cmd to pair again.'
-                break
+                Write-State 'Pairing is currently rejected. Re-run Install.cmd to pair again; receiver remains available.'
+                for($i=0;$i -lt 50;$i++) { [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 200 }
+                continue
             }
             Write-State 'Receiver could not complete request. Check connectivity or request a new playback.'
         }

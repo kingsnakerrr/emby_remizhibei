@@ -1,4 +1,4 @@
-param([ValidateSet('Browser','Resident')][string]$Mode='Browser', [string]$PlayerPath='', [switch]$RePair, [switch]$NoStart)
+param([string]$PlayerPath='', [switch]$RePair, [switch]$NoStart)
 . (Join-Path $PSScriptRoot 'Common.ps1')
 try {
     $check=New-Object Threading.Mutex($false,'Local\JAVChannelPlayback')
@@ -27,7 +27,7 @@ try {
     }
     Assert-Player $PlayerPath
     $settings.PlayerPath=(Resolve-Path -LiteralPath $PlayerPath).Path
-    if($Mode -eq 'Resident' -and ($RePair -or -not $settings.Credential)) {
+    if($RePair -or -not $settings.Credential) {
         Write-Host 'In your Telegram bot, send /pc (or /pc SERVER_ID).'
         $link=(Read-Host 'Paste the single-use pairing URL from the bot').Trim()
         $uri=Test-HttpUrl $link
@@ -42,37 +42,28 @@ try {
         $settings.Origin=$origin
         $settings.Credential=New-Object Management.Automation.PSCredential('JAVChannelPlayer',(ConvertTo-SecureString $paired.token -AsPlainText -Force))
     }
-    if($Mode -eq 'Browser' -and $settings.Credential) {
-        # Switching modes revokes desktop delivery, while preserving the media binding in Emby/TG.
-        try { $null=Invoke-Api ($settings.Origin+'/potplayer/revoke') (Get-DeviceToken $settings) }
-        catch { Write-Warning 'Could not revoke online. Send /pc_off to your Telegram bot as well.' }
-        $settings.Credential=$null
-    }
     Stop-Resident
-    $files=@('Common.ps1','Native.cs','Bridge.ps1','Resident.ps1','Install.ps1','Manage.ps1','Install.cmd','Uninstall.cmd','Start.cmd','Stop.cmd','RePair.cmd','VERSION.txt')
+    # Give an already installed supervisor time to stop and release its single-instance mutex.
+    Start-Sleep -Seconds 2
+    $files=@('Common.ps1','Native.cs','Resident.ps1','Supervisor.ps1','Launcher.vbs','Install.ps1','Manage.ps1','Install.cmd','Uninstall.cmd','Start.cmd','Stop.cmd','RePair.cmd','VERSION.txt')
     foreach($name in $files) {
         $source=Join-Path $PSScriptRoot $name
         $dest=Join-Path $script:AppRoot $name
         if([IO.Path]::GetFullPath($source) -ine [IO.Path]::GetFullPath($dest)) { Copy-Item -LiteralPath $source -Destination $dest -Force }
     }
-    $settings.Mode=$Mode
+    $settings.Mode='Resident'
     Save-Settings $settings
+    # Remove the retired browser protocol. PotPlayer is now launched only by the paired desktop receiver.
     $key='HKCU:\Software\Classes\hdz-potplayer-sync'
-    New-Item -Path "$key\shell\open\command" -Force | Out-Null
-    Set-Item -Path $key -Value ('URL:'+$script:AppName)
-    New-ItemProperty -Path $key -Name 'URL Protocol' -Value '' -PropertyType String -Force | Out-Null
-    $bridge=Join-Path $script:AppRoot 'Bridge.ps1'
-    Set-Item -Path "$key\shell\open\command" -Value ('"'+$script:PsExe+'" -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$bridge+'" -Link "%1"')
+    if(Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Recurse -Force }
     $run='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-    $resident='"'+$script:PsExe+'" -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+(Join-Path $script:AppRoot 'Resident.ps1')+'"'
-    if($Mode -eq 'Resident') {
-        New-Item -Path $run -Force | Out-Null
-        New-ItemProperty -Path $run -Name 'JAVChannelPlayer' -Value $resident -PropertyType String -Force | Out-Null
-    } else { Remove-ItemProperty -Path $run -Name 'JAVChannelPlayer' -ErrorAction SilentlyContinue }
+    $launcher='"'+(Join-Path $env:SystemRoot 'System32\wscript.exe')+'" //B //NoLogo "'+(Join-Path $script:AppRoot 'Launcher.vbs')+'"'
+    New-Item -Path $run -Force | Out-Null
+    New-ItemProperty -Path $run -Name 'JAVChannelPlayer' -Value $launcher -PropertyType String -Force | Out-Null
     $uninstall='HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\JAVChannelPlayer'
     New-Item -Path $uninstall -Force | Out-Null
     $properties=@{
-        DisplayName=$script:AppName; DisplayVersion='15.7'; Publisher='JAV Channel Player';
+        DisplayName=$script:AppName; DisplayVersion='15.9'; Publisher='JAV Channel Player';
         InstallLocation=$script:AppRoot;
         UninstallString=('"'+$script:PsExe+'" -NoProfile -ExecutionPolicy Bypass -File "'+(Join-Path $script:AppRoot 'Manage.ps1')+'" -Action Uninstall')
     }
@@ -87,9 +78,9 @@ try {
         $shortcut.WindowStyle=7
         $shortcut.Save()
     }
-    Write-State ('Version 15.7 installed/updated; mode='+$Mode)
-    if($Mode -eq 'Resident' -and -not $NoStart) { Start-Resident }
-    Write-Host ($script:AppName+' 15.7 installed/updated. Existing pairing is preserved on same-mode updates.')
+    Write-State 'Version 15.9 installed/updated; direct desktop mode enabled.'
+    if(-not $NoStart) { Start-Resident }
+    Write-Host ($script:AppName+' 15.9 installed/updated. Existing pairing is preserved.')
     Write-Host 'Uninstall from Windows Settings > Apps, or run Uninstall.cmd.'
     Write-Host 'Close this window and request a NEW Telegram playback link.'
 } catch {

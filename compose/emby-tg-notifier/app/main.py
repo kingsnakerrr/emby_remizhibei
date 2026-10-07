@@ -2356,23 +2356,18 @@ async def process_bot_callback(token: str, bot_info: dict, q: dict):
             await bot_answer_callback(token,qid,"无法核验绑定的 Emby 用户（用户停用、已删除或服务器暂不可用），未启动播放。",True)
             return
         delivery = pot_sync.dispatch(server, uid, item_id)
-        if delivery != 'offline':
-            await bot_answer_callback(token,qid,"已发送到配对电脑，启动后同步 Emby 进度。" if delivery=='sent' else "电脑正在播放或启动中，请先关闭当前播放。",True)
-            return
+        if delivery == 'sent':
+            await bot_answer_callback(token,qid,"已发送到配对电脑，正在直接启动 PotPlayer。",True)
+        elif delivery == 'busy':
+            await bot_answer_callback(token,qid,"电脑正在播放或启动中，请先关闭当前影片。",True)
+        else:
+            await bot_answer_callback(token,qid,"电脑端未配对或当前离线。请启动“JAV频道点播”后台程序；现在不再使用 Chrome 备用播放。",True)
+        return
     ticket=create_senplayer_ticket(sid,item_id,uid,300,player=player)
     player_name="PotPlayer" if player=="pp" else "SenPlayer"
     play_url=f"{public_base}/{'ps' if player == 'pp' else 'sp'}/{ticket}"
     markup={"inline_keyboard":[[{"text":f"▶️ 打开 {player_name}","url":play_url}]]}
-    if player == "pp":
-        markup["inline_keyboard"].append([{
-            "text":"首次加载 PotPlayer 插件（JAV频道点播）",
-            "url":f"{public_base}/downloads/potplayer-browser-launcher.zip",
-        }])
-    install_note = ("\n\n请先安装新版 Windows 同步组件（旧版需重装）。"
-                    "\n方法1：浏览器跳转，不常驻，仅播放期间同步。"
-                    "\n方法2：后台常驻，私聊发送 /pc 配对后可直接播放。"
-                    "\n两种方法都同步 Emby 续播进度和播放记录。"
-                    "\n未配对或电脑离线时使用下方浏览器入口；约10秒删除。") if player == "pp" else ""
+    install_note = ""
     try:
         sent = await bot_send(token,uid,f"🎬 已按 Emby 用户 <b>{html.escape(binding['emby_username'])}</b> 准备播放。\n点击下面按钮打开 {player_name}：{install_note}",markup)
         if isinstance(sent, dict):
@@ -3037,13 +3032,13 @@ async def potplayer_installer_download():
     package = Path(__file__).resolve().parent / "downloads" / "potplayer-browser-launcher.zip"
     if not package.is_file():
         raise HTTPException(status_code=404, detail="安装包暂不可用，请联系管理员")
-    return FileResponse(package, media_type="application/zip", filename="JAV频道点播-v15.7.zip",
+    return FileResponse(package, media_type="application/zip", filename="JAV频道点播-v15.9.zip",
                         headers={"Cache-Control":"no-store", "X-Content-Type-Options":"nosniff"})
 
 
 @app.get("/pp/{token}")
 async def potplayer_ticket_open(token: str):
-    return await player_ticket_open(token, "pp")
+    raise HTTPException(status_code=410, detail="PotPlayer 浏览器播放入口已移除，请使用已配对的电脑端直接播放")
 
 
 async def player_ticket_open(token: str, player: str):

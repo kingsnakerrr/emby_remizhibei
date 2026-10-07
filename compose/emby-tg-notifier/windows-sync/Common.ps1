@@ -8,7 +8,7 @@ $script:PsExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\power
 function Read-Settings {
     $path = Join-Path $script:AppRoot 'settings.xml'
     if (Test-Path -LiteralPath $path) { return Import-Clixml -LiteralPath $path }
-    return @{ Mode='Browser'; PlayerPath=''; Origin=''; Credential=$null }
+    return @{ Mode='Resident'; PlayerPath=''; Origin=''; Credential=$null }
 }
 function Save-Settings($Settings) {
     $Settings | Export-Clixml -LiteralPath (Join-Path $script:AppRoot 'settings.xml') -Encoding UTF8
@@ -64,7 +64,9 @@ function Assert-Player([string]$Path) {
 }
 function Start-Resident {
     Remove-Item -LiteralPath (Join-Path $script:AppRoot 'stop.request') -ErrorAction SilentlyContinue
-    Start-Process -FilePath $script:PsExe -ArgumentList ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+(Join-Path $script:AppRoot 'Resident.ps1')+'"') -WindowStyle Hidden | Out-Null
+    $launcher=Join-Path $script:AppRoot 'Launcher.vbs'
+    $wscript=Join-Path $env:SystemRoot 'System32\wscript.exe'
+    Start-Process -FilePath $wscript -ArgumentList ('//B //NoLogo "'+$launcher+'"') -WindowStyle Hidden | Out-Null
 }
 function Stop-Resident {
     New-Item -ItemType File -Path (Join-Path $script:AppRoot 'stop.request') -Force | Out-Null

@@ -15,37 +15,30 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $unpack=Join-Path $sandbox 'package'
     [IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $root 'app\downloads\potplayer-browser-launcher.zip'),$unpack)
-    $folders=Get-ChildItem -LiteralPath $unpack -Directory | Sort-Object Name
-    $one=$folders[0].FullName
-    $two=$folders[1].FullName
-    & (Join-Path $one 'Install.ps1') -Mode Browser -PlayerPath 'C:\Program Files\DAUM\PotPlayer\PotPlayerMini64.exe' -NoStart
-    if($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'Browser installation failed.' }
     $installed=Join-Path $sandbox 'JAV-Channel-Player'
+    New-Item -ItemType Directory -Path $installed -Force | Out-Null
+    $credential=New-Object Management.Automation.PSCredential('test',(ConvertTo-SecureString ('secret-fixture'*4) -AsPlainText -Force))
+    @{Mode='Resident';PlayerPath='C:\Program Files\DAUM\PotPlayer\PotPlayerMini64.exe';Origin='https://notifier.invalid';Credential=$credential}|Export-Clixml -LiteralPath (Join-Path $installed 'settings.xml')
+    & (Join-Path $unpack 'Install.ps1') -PlayerPath 'C:\Program Files\DAUM\PotPlayer\PotPlayerMini64.exe' -NoStart
+    if($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'Direct installation failed.' }
     if(-not (Test-Path -LiteralPath (Join-Path $installed 'Uninstall.cmd'))) { throw 'Uninstaller missing.' }
     $display=(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\JAVChannelPlayer').DisplayName
     if($display -cne $name) { throw 'Wrong product name.' }
-    if(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name JAVChannelPlayer -ErrorAction SilentlyContinue) { throw 'Browser mode unexpectedly autostarts.' }
-    $settings=Import-Clixml -LiteralPath (Join-Path $installed 'settings.xml')
-    $settings.Origin='https://notifier.invalid'
-    $settings.Credential=New-Object Management.Automation.PSCredential('test',(ConvertTo-SecureString ('secret-fixture'*4) -AsPlainText -Force))
-    $settings|Export-Clixml -LiteralPath (Join-Path $installed 'settings.xml')
-    & (Join-Path $two 'Install.ps1') -Mode Resident -NoStart
     $before=Import-Clixml -LiteralPath (Join-Path $installed 'settings.xml')
-    & (Join-Path $two 'Install.ps1') -Mode Resident -NoStart
+    & (Join-Path $unpack 'Install.ps1') -NoStart
     $after=Import-Clixml -LiteralPath (Join-Path $installed 'settings.xml')
     if($after.Credential.GetNetworkCredential().Password -cne $before.Credential.GetNetworkCredential().Password) { throw 'Update lost pairing.' }
     if((Get-Content -LiteralPath (Join-Path $installed 'settings.xml') -Raw).Contains('secret-fixture')) { throw 'Pairing saved in plaintext.' }
-    if(-not (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name JAVChannelPlayer)) { throw 'Resident startup missing.' }
-    $after.Credential=$null
-    $after|Export-Clixml -LiteralPath (Join-Path $installed 'settings.xml')
-    & (Join-Path $one 'Install.ps1') -Mode Browser -NoStart
-    if(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name JAVChannelPlayer -ErrorAction SilentlyContinue) { throw 'Switching modes left startup behind.' }
+    $startup=(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name JAVChannelPlayer).JAVChannelPlayer
+    if($startup -notmatch 'wscript\.exe' -or $startup -notmatch 'Launcher\.vbs') { throw 'Hidden supervisor startup missing.' }
+    if(Test-Path 'HKCU:\Software\Classes\hdz-potplayer-sync') { throw 'Retired browser protocol remains.' }
+    foreach($file in @('Supervisor.ps1','Launcher.vbs')) { if(-not (Test-Path -LiteralPath (Join-Path $installed $file))) { throw "$file missing." } }
     & (Join-Path $installed 'Manage.ps1') -Action Uninstall -Quiet
     if(Test-Path -LiteralPath $installed) { throw 'Uninstall left program files.' }
     if(Test-Path 'HKCU:\Software\Classes\hdz-potplayer-sync') { throw 'Uninstall left protocol.' }
     if(Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\JAVChannelPlayer') { throw 'Uninstall registration remains.' }
     if(Test-Path -LiteralPath $menu) { throw 'Start menu folder remains.' }
-    Write-Output 'PASS: browser install, resident install, DPAPI, repeat update preserves pairing, mode switch, uninstall.'
+    Write-Output 'PASS: direct install, DPAPI, repeat update preserves pairing, hidden watchdog startup, uninstall.'
 } finally {
     $env:LOCALAPPDATA=$oldLocal
     Remove-PSDrive HKCU -ErrorAction SilentlyContinue
