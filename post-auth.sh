@@ -25,6 +25,18 @@ case "${ACTION}" in
   strm-title-fixer)
     "${REPO_DIR}/scripts/fix-emby-strm-chinese-titles.sh" "${2:-install}"
     ;;
+  metadata-guard)
+    "${REPO_DIR}/scripts/install-emby-metadata-guard.sh" "${2:-install}"
+    ;;
+  symedia-archive-retry)
+    "${REPO_DIR}/scripts/install-symedia-archive-retry.sh" "${2:-install}"
+    ;;
+  cd2-cache-refresh)
+    "${REPO_DIR}/scripts/install-cd2-cache-refresh.sh" "${2:-install}"
+    ;;
+  emby-recent-refresh)
+    "${REPO_DIR}/scripts/install-emby-recent-refresh.sh" "${2:-install}"
+    ;;
   stack-control)
     "${REPO_DIR}/scripts/install-stack-control-web.sh" "${2:-install}"
     ;;
@@ -35,7 +47,7 @@ case "${ACTION}" in
     "${REPO_DIR}/scripts/install-home-media-backup.sh" "${2:-}"
     ;;
   *)
-    echo "Usage: $0 {cd2|strm-assistant|play-prewarm|strm-image-fixer|strm-title-fixer|stack-control|symedia|home-media-backup}"
+    echo "Usage: $0 {cd2|strm-assistant|play-prewarm|strm-image-fixer|strm-title-fixer|metadata-guard|symedia-archive-retry|cd2-cache-refresh|emby-recent-refresh|stack-control|symedia|home-media-backup}"
     exit 2
     ;;
 esac

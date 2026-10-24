@@ -41,6 +41,19 @@ fi
 if systemctl list-unit-files emby-fix-strm-titles.timer >/dev/null 2>&1; then
   check "Emby STRM 中文标题监控" systemctl is-active --quiet emby-fix-strm-titles.timer
 fi
+if systemctl list-unit-files emby-metadata-guard.timer >/dev/null 2>&1; then
+  check "Emby 元数据守护" systemctl is-active --quiet emby-metadata-guard.timer
+fi
+if systemctl list-unit-files symedia-archive-retry.service >/dev/null 2>&1; then
+  check "Symedia 归档自动重试" systemctl is-active --quiet symedia-archive-retry.service
+fi
+if systemctl list-unit-files emby-refresh.timer >/dev/null 2>&1; then
+  check "Emby 近期入库刷新" systemctl is-active --quiet emby-refresh.timer
+fi
+if [[ -x /root/docker-compose/symedia/cache-refresh/run.sh ]]; then
+  check "CD2 删除缓存刷新计划" sh -c \
+    "crontab -l 2>/dev/null | grep -q '/root/docker-compose/symedia/cache-refresh/run.sh'"
+fi
 if systemctl list-unit-files emby-stack-control.service >/dev/null 2>&1; then
   check "Emby Stack Control 控制台" systemctl is-active --quiet emby-stack-control.service
   check "Emby Stack Control 6011" \

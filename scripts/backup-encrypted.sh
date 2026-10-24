@@ -26,6 +26,7 @@ cleanup() {
     docker start cd2 >/dev/null 2>&1 || true
     sleep 10
     docker start symedia emby >/dev/null 2>&1 || true
+    docker start emby-tg-notifier >/dev/null 2>&1 || true
   fi
   case "${temporary_dir}" in
     /root/emby-backup-work.*) rm -rf -- "${temporary_dir}" ;;
@@ -33,7 +34,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker stop emby symedia cd2 >/dev/null 2>&1 || true
+docker stop emby-tg-notifier emby symedia cd2 >/dev/null 2>&1 || true
 services_stopped=1
 
 # Symedia 必须停机后再归档，保证 symedia.db、config.yaml 与 .secret_key
@@ -72,6 +73,21 @@ paths=(
   root/docker-compose/symedia
 )
 
+optional_paths=(
+  root/docker-compose/emby_rukutongzhi
+  root/docker-compose/emby-play-prewarm
+  root/.config/rclone/rclone.conf
+  root/scripts/rclone-home-backup.sh
+  etc/emby-metadata-guard.conf
+  etc/nginx/sites-available/default
+  etc/letsencrypt
+)
+for optional_path in "${optional_paths[@]}"; do
+  if [[ -e "/${optional_path}" ]]; then
+    paths+=("${optional_path}")
+  fi
+done
+
 # 下列目录全是可重建缓存、日志、更新包或历史调参备份。排除它们不会
 # 影响账号、任务、数据库和优化参数。媒体文件、STRM、NFO、封面以及
 # Emby 海报元数据不在备份范围内。
@@ -89,6 +105,9 @@ tar --xattrs --acls \
   --exclude='root/docker-compose/symedia/config/logs' \
   --exclude='root/docker-compose/symedia/config/cache' \
   --exclude='root/docker-compose/symedia/config/temp' \
+  --exclude='root/docker-compose/symedia/cache-refresh/logs' \
+  --exclude='root/docker-compose/emby_rukutongzhi/__pycache__' \
+  --exclude='root/docker-compose/emby_rukutongzhi/app/__pycache__' \
   -C / -czf "${archive}" "${paths[@]}"
 echo "请输入强密码加密备份。密码遗失后无法恢复。"
 age -p -o "${encrypted}" "${archive}"

@@ -8,6 +8,9 @@
 - Emby 播放预热器自动预读冷片源头尾，缓解第一次起播慢；
 - Emby STRM 图片和元素补齐监控自动补齐多版本 STRM 缺失封面，并触发缺失 NFO/背景图/简介的项目重新刮削；
 - Emby STRM 中文标题、简介等修正监控按中文文件夹名修正残留英文标题，并触发英文简介重新刮削；
+- Emby 元数据守护每 15 分钟修正中文目录中的英文 NFO 标题并审计缺失元素；
+- Symedia CD2 归档自动重试核验假失败并安全重试真正失败；
+- CD2 删除缓存刷新定期清理外部删除后残留的目录视图；
 - Rclone 网页控制台把另一团队盘中的 STRM/NFO/图片单向增量同步到本地；
 - 可选安装 Emby Telegram 入库通知与 JAV 频道点播控制台；
 - 神医助手在用户自行安装和授权后应用已验证的播放相关设置。
@@ -58,7 +61,11 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | Emby | `amilys/embyserver` | 与当前神医环境兼容的第三方定制镜像，不是 Emby 官方镜像 |
 | Emby 播放预热器 | 本仓库 `scripts/install-emby-play-prewarm.sh` | 默认安装为 systemd 服务，播放时预读媒体头尾和恢复进度附近 Range |
 | Emby STRM 图片和元素补齐监控 | 本仓库 `scripts/install-emby-strm-image-fixer.sh` | 默认安装为 systemd timer，补齐本地图片名并请求 Emby 刷新缺失元素 |
-| Emby STRM 中文标题、简介等修正监控 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 默认安装为 systemd timer，备份数据库后修正残留英文标题并刷新中文简介 |
+| Emby STRM 中文标题、简介等修正工具 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 保留的手动兼容工具，会备份数据库后修正标题；全新安装默认使用元数据守护 |
+| Emby 元数据守护 | 本仓库 `scripts/install-emby-metadata-guard.sh` | 默认安装为 systemd timer，优先修正 NFO 并生成缺失元素审计报告 |
+| Emby 近期入库刷新 | 本仓库 `scripts/install-emby-recent-refresh.sh` | 默认安装为 systemd timer，每 5 分钟强制刷新最近 60 分钟入库项目；不保存 API Key |
+| Symedia 归档自动重试 | 本仓库 `scripts/install-symedia-archive-retry.sh` | 默认安装为 systemd 服务，核验 CD2 假失败并最多重试三次 |
+| CD2 删除缓存刷新 | 本仓库 `scripts/install-cd2-cache-refresh.sh` | 默认安装 root cron，外部删除后刷新目录缓存 |
 | Symedia | `shenxianmq/symedia` | 固定当前验证过的项目镜像摘要 |
 | Rclone 同步控制台 | Debian/Ubuntu 的 `rclone`、`python3-flask` | 本仓库网页服务，端口 6096 |
 | Emby Telegram 通知 | 本仓库 `compose/emby-tg-notifier` | v15.9 Windows 直达点播，支持 Movie/TV/JAV 通知、TG 用户绑定、SenPlayer/PotPlayer 点播 |
@@ -98,7 +105,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 - 固定 Symedia 为当前服务器已验证的镜像摘要，避免 `latest` 漂移。
 - 在神医助手已安装后，一键应用播放相关设置和凌晨任务。
 - 默认安装 STRM 图片和元素补齐监控，每 30 分钟补齐多版本 STRM 的 `*-poster/fanart/backdrop/clearlogo`，并请求 Emby 刷新缺 NFO/图片/简介的项目。
-- 默认安装 STRM 中文标题、简介等修正监控，每 15 分钟纠正刮削后残留的英文展示标题，并请求 Emby 刷新英文简介。
+- 默认安装 Emby 元数据守护、近期入库刷新、Symedia 归档自动重试和 CD2 删除缓存刷新。
 - 安装 Rclone 和 6096 网页控制台，支持上传并验证 `rclone.conf`、浏览远程目录、手动和定时单向同步。
 - 检查挂载传播、路径、服务和敏感文件。
 - 可选生成不包含媒体数据的 `age` 加密配置备份。
@@ -187,6 +194,33 @@ Google、CD2、Emby 的登录密码。
     ```bash
    sudo ./healthcheck.sh
    ```
+
+当前生产服务器的软件、插件、补丁和明确不再恢复的旧组件见
+[Hostdzire Emby 服务器现状](docs/current-server-inventory.md)。
+
+## 归档失败与元数据自动修复
+
+新装或重装四项守护：
+
+```bash
+sudo ./post-auth.sh metadata-guard
+sudo ./post-auth.sh symedia-archive-retry
+sudo ./post-auth.sh cd2-cache-refresh
+sudo ./post-auth.sh emby-recent-refresh
+```
+
+状态检查：
+
+```bash
+sudo ./post-auth.sh metadata-guard status
+sudo ./post-auth.sh symedia-archive-retry status
+sudo ./post-auth.sh cd2-cache-refresh status
+sudo ./post-auth.sh emby-recent-refresh status
+```
+
+归档重试只在目标路径和文件大小可以验证时改回成功；源、目标都不存在时会继续
+保留红色失败。元数据守护只根据明确的中文目录名修正 NFO，不自动翻译无依据的
+英文目录。
 
 ## Emby 播放预热器
 
@@ -378,7 +412,7 @@ sudo ./scripts/backup-encrypted.sh /root/emby-stack-backup
 Git 历史。
 
 备份保留 CD2 登录、Emby 数据库和设置、神医配置、Symedia
-YAML/密钥/数据库，但明确不包含：
+YAML/密钥/数据库、TG 通知机器人数据、rclone 配置以及 HTTPS 证书私钥，但明确不包含：
 
 - `/home` 下的 STRM、NFO、封面和其他已生成媒体元素；
 - Emby 的 `metadata` 海报目录和 `mediainfo-json`；

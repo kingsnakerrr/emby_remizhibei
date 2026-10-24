@@ -18,5 +18,6 @@ strm-assistant-import/
 # Runtime state must stay on the server.
 runtime/
 backup-output/
+outputs/
 __pycache__/
 *.pyc

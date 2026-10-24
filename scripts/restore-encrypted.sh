@@ -75,5 +75,12 @@ cd /root/docker-compose/symedia
 docker compose up -d
 cd /root/docker-compose/emby
 docker compose up -d
+if [[ -f /root/docker-compose/emby_rukutongzhi/docker-compose.yml ]]; then
+  cd /root/docker-compose/emby_rukutongzhi
+  docker compose up -d --build
+fi
+if command -v nginx >/dev/null 2>&1 && nginx -t; then
+  systemctl reload nginx || true
+fi
 
 echo "恢复完成，请运行仓库中的 ./healthcheck.sh。"

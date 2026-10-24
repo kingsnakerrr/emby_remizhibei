@@ -165,7 +165,7 @@ install_packages() {
   fi
   apt-get install -y \
     ca-certificates curl gnupg lsb-release \
-    python3 sqlite3 jq age tar gzip openssl nginx \
+    python3 python3-requests sqlite3 jq age tar gzip openssl nginx \
     fuse3 kmod
 
   if ! command -v docker >/dev/null 2>&1 ||
@@ -234,6 +234,26 @@ install_strm_title_fixer() {
   fi
 }
 
+install_metadata_guard() {
+  echo "安装 Emby 元数据守护……"
+  bash "${REPO_DIR}/scripts/install-emby-metadata-guard.sh"
+}
+
+install_symedia_archive_retry() {
+  echo "安装 Symedia 归档自动重试……"
+  bash "${REPO_DIR}/scripts/install-symedia-archive-retry.sh"
+}
+
+install_cd2_cache_refresh() {
+  echo "安装 CD2 删除缓存刷新……"
+  bash "${REPO_DIR}/scripts/install-cd2-cache-refresh.sh"
+}
+
+install_emby_recent_refresh() {
+  echo "安装 Emby 近期入库元数据刷新……"
+  bash "${REPO_DIR}/scripts/install-emby-recent-refresh.sh"
+}
+
 install_packages
 
 if [[ -f /var/run/reboot-required ]]; then
@@ -245,7 +265,10 @@ if [[ -n "${RESTORE_DIR}" ]]; then
   bash "${REPO_DIR}/scripts/restore-encrypted.sh" "${RESTORE_DIR}"
   install_play_prewarm
   install_strm_image_fixer
-  install_strm_title_fixer
+  install_metadata_guard
+  install_symedia_archive_retry
+  install_cd2_cache_refresh
+  install_emby_recent_refresh
   bash "${REPO_DIR}/healthcheck.sh"
   exit 0
 fi
@@ -286,7 +309,10 @@ docker compose up -d
 
 install_play_prewarm
 install_strm_image_fixer
-install_strm_title_fixer
+install_metadata_guard
+install_symedia_archive_retry
+install_cd2_cache_refresh
+install_emby_recent_refresh
 
 echo
 echo "基础安装完成。"
@@ -297,5 +323,8 @@ echo "4. 神医助手安装授权后运行: ${REPO_DIR}/post-auth.sh strm-assist
 echo "5. 填写 ${STACK_ROOT}/symedia/.env 后再启动 Symedia。"
 echo "6. Emby 播放预热器已默认安装；CD2、Emby 和媒体库准备好后会自动生效。"
 echo "7. STRM 图片补齐器已默认安装；多版本缺封面时会自动补齐。"
-echo "8. STRM 中文标题监控已默认安装；刮削后残留英文标题会自动修正。"
-echo "9. Rclone 单向同步控制台由向导自动安装，端口为 6096。"
+echo "8. Emby 元数据守护已默认安装；每15分钟修正中文NFO标题并审计缺失元素。"
+echo "9. Symedia 归档自动重试已安装；CD2假失败会自动核验并恢复。"
+echo "10. CD2 删除缓存刷新已安装；外部删除后自动刷新目录缓存。"
+echo "11. Emby 近期入库刷新已安装；每5分钟检查最近项目并强制刷新元数据。"
+echo "12. Rclone 单向同步控制台由向导自动安装，端口为 6096。"
