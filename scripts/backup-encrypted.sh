@@ -79,6 +79,7 @@ optional_paths=(
   root/.config/rclone/rclone.conf
   root/scripts/rclone-home-backup.sh
   etc/emby-metadata-guard.conf
+  etc/nginx/conf.d
   etc/nginx/sites-available/default
   etc/letsencrypt
 )

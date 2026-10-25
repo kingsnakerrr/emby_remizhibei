@@ -13,8 +13,9 @@ OAuth、License 或 Telegram 管理员 ID。
 | Emby TG notifier | Docker 本地构建 | `/root/docker-compose/emby_rukutongzhi` | 入库通知、TG 绑定、SenPlayer/PotPlayer 点播 |
 | Nginx + Certbot | systemd | `/etc/nginx`、`/etc/letsencrypt` | Emby HTTPS 与证书自动续期 |
 
-当前证书域名包括 `hdz.222321.xyz` 和 `jj88.rmzb.de`。证书私钥只允许进入
-`age` 加密备份，不能提交 Git。
+Emby 正式入口为 `https://emby.rmzb.de`，Let's Encrypt 证书由 Certbot 自动续期。
+`8096` 只绑定 `127.0.0.1` 供 Nginx 使用；旧 `hdz.222321.xyz` 的 Emby HTTPS
+入口只跳转到新域名。证书私钥只允许进入 `age` 加密备份，不能提交 Git。
 
 ## Emby 插件
 

@@ -315,7 +315,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   <div class="muted">Telegram 的“▶️ SenPlayer 播放”会先打开通知程序，再唤起 iOS SenPlayer。无需填写 SenPlayer 用户名或密码。</div>
 
   <label style="margin-top:10px">SenPlayer 使用的 Emby 外网地址</label>
-  <input name="senplayer_emby_url" value="{{server['senplayer_emby_url'] or server['emby_url']}}" placeholder="例如 http://hdz.222321.xyz:8096">
+  <input name="senplayer_emby_url" value="{{server['senplayer_emby_url'] or server['emby_url']}}" placeholder="例如 https://emby.rmzb.de">
   <div class="muted" style="margin-top:4px">如果上面的 Emby 地址是 http://emby:8096 这种 Docker 内网地址，这里请改成 iPhone 能访问的公网 IP / 域名地址。</div>
 
   <label style="margin-top:10px">通知程序公网地址</label>

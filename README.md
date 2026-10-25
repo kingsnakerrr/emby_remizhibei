@@ -198,6 +198,33 @@ Google、CD2、Emby 的登录密码。
 当前生产服务器的软件、插件、补丁和明确不再恢复的旧组件见
 [Hostdzire Emby 服务器现状](docs/current-server-inventory.md)。
 
+## Emby HTTPS 与公网端口
+
+生产入口统一为 `https://emby.rmzb.de`。Emby 的 `8096` 默认只绑定
+`127.0.0.1`，由 Nginx 在 `443` 提供公网 HTTPS；CD2、Symedia、TG 通知等
+其他业务端口不会被此脚本修改。
+
+DNS 已指向服务器后安装或重装：
+
+```bash
+EMBY_DOMAIN=emby.rmzb.de \
+OLD_EMBY_DOMAIN=hdz.222321.xyz \
+sudo -E ./post-auth.sh emby-https
+```
+
+检查证书、反代和本机 8096：
+
+```bash
+EMBY_DOMAIN=emby.rmzb.de sudo -E ./post-auth.sh emby-https status
+```
+
+正常管理直接打开 `https://emby.rmzb.de`。Nginx 故障时可从自己的电脑建立
+SSH 隧道，再打开 `http://127.0.0.1:8096`：
+
+```bash
+ssh -L 8096:127.0.0.1:8096 root@服务器地址
+```
+
 ## 归档失败与元数据自动修复
 
 新装或重装四项守护：
