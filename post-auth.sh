@@ -40,6 +40,9 @@ case "${ACTION}" in
   emby-https)
     "${REPO_DIR}/scripts/install-emby-https.sh" "${2:-install}"
     ;;
+  cfemby-test)
+    "${REPO_DIR}/scripts/install-cfemby-test-line.sh" "${2:-install}"
+    ;;
   stack-control)
     "${REPO_DIR}/scripts/install-stack-control-web.sh" "${2:-install}"
     ;;
@@ -50,7 +53,7 @@ case "${ACTION}" in
     "${REPO_DIR}/scripts/install-home-media-backup.sh" "${2:-}"
     ;;
   *)
-    echo "Usage: $0 {cd2|strm-assistant|play-prewarm|strm-image-fixer|strm-title-fixer|metadata-guard|symedia-archive-retry|cd2-cache-refresh|emby-recent-refresh|emby-https|stack-control|symedia|home-media-backup}"
+    echo "Usage: $0 {cd2|strm-assistant|play-prewarm|strm-image-fixer|strm-title-fixer|metadata-guard|symedia-archive-retry|cd2-cache-refresh|emby-recent-refresh|emby-https|cfemby-test|stack-control|symedia|home-media-backup}"
     exit 2
     ;;
 esac

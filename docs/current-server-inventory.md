@@ -17,6 +17,10 @@ Emby 正式入口为 `https://emby.rmzb.de`，Let's Encrypt 证书由 Certbot �
 `8096` 只绑定 `127.0.0.1` 供 Nginx 使用；旧 `hdz.222321.xyz` 的 Emby HTTPS
 入口只跳转到新域名。证书私钥只允许进入 `age` 加密备份，不能提交 Git。
 
+独立测试入口 `https://cfemby.rmzb.de` 使用 Cloudflare 橙云代理。源站对该入口统一
+返回 `Cache-Control: private, no-store`，用于比较CF线路和正式直连线路，不缓存
+影片或Emby API。正式入口不受测试线路影响。
+
 ## Emby 插件
 
 - Strm Assistant Pro：播放体验、媒体信息提取与 STRM 优化；商业 DLL/授权不入库。

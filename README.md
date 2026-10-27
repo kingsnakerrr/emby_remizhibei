@@ -225,6 +225,23 @@ SSH 隧道，再打开 `http://127.0.0.1:8096`：
 ssh -L 8096:127.0.0.1:8096 root@服务器地址
 ```
 
+### Cloudflare 独立测试线路
+
+先在Cloudflare创建 `cfemby.rmzb.de` 的橙云DNS记录，再执行：
+
+```bash
+CF_EMBY_DOMAIN=cfemby.rmzb.de sudo -E ./post-auth.sh cfemby-test
+```
+
+测试入口会反代同一个Emby，但统一返回 `private, no-store`，只比较CF线路质量，
+不缓存影片和API。正式入口 `https://emby.rmzb.de` 不会被修改。
+
+状态检查：
+
+```bash
+CF_EMBY_DOMAIN=cfemby.rmzb.de sudo -E ./post-auth.sh cfemby-test status
+```
+
 ## 归档失败与元数据自动修复
 
 新装或重装四项守护：
