@@ -1,0 +1,43 @@
+services:
+  # 主线路：把 Emby 容器里的原 CD2 路径覆盖成 rclone VFS 只读挂载。
+  # 用户访问标准 HTTPS 入口时，仍使用唯一 Emby，但实际媒体读取走 rclone。
+  emby:
+    volumes:
+      - /home/gdrive/zero:/CloudNAS/CloudDrive/GoogleDrive/zero:ro,rslave
+
+  # 备用线路：不是第二套 Emby，只在 Nginx 8443 收到原画直播放请求时
+  # 按 ItemId 查询同一个 Emby 数据库，再从宿主机 CD2 挂载读取文件。
+  cd2-playback-gateway:
+    build:
+      context: ./cd2-playback-gateway
+    image: local/emby-cd2-playback-gateway:1.0
+    container_name: emby-cd2-playback-gateway
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - emby
+    environment:
+      - LISTEN_HOST=127.0.0.1
+      - LISTEN_PORT=8097
+      - EMBY_BASE_URL=http://127.0.0.1:8096
+      - LIBRARY_DB=/emby-data/library.db
+      - ALLOWED_MEDIA_PREFIX=/CloudNAS/CloudDrive/GoogleDrive/zero/
+      - AUTH_CACHE_SECONDS=60
+      - READ_BUFFER=1048576
+    volumes:
+      - /root/docker-compose/emby/config/data:/emby-data:ro
+      - /home:/home:ro
+      - /CloudNAS:/CloudNAS:ro,rslave
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8097/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

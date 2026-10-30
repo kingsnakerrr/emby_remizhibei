@@ -6,6 +6,7 @@
 - Symedia 生成 STRM/NFO 等本地媒体元素；
 - Emby 扫描入库并直连播放；
 - Emby 播放预热器自动预读冷片源头尾，缓解第一次起播慢；
+- 可选的单 Emby 双播放线路：主线路走 rclone VFS，备用 HTTPS 端口走 CD2，账号、插件和进度完全共用；
 - Emby STRM 图片和元素补齐监控自动补齐多版本 STRM 缺失封面，并触发缺失 NFO/背景图/简介的项目重新刮削；
 - Emby STRM 中文标题、简介等修正监控按中文文件夹名修正残留英文标题，并触发英文简介重新刮削；
 - Emby 元数据守护每 15 分钟修正中文目录中的英文 NFO 标题并审计缺失元素；
@@ -60,6 +61,7 @@ EMBY_STACK_FULL_UPGRADE=1 sudo -E bash install.sh
 | CloudDrive2 | `cloudnas/clouddrive2` | 固定当前验证过的镜像摘要 |
 | Emby | `amilys/embyserver` | 与当前神医环境兼容的第三方定制镜像，不是 Emby 官方镜像 |
 | Emby 播放预热器 | 本仓库 `scripts/install-emby-play-prewarm.sh` | 默认安装为 systemd 服务，播放时预读媒体头尾和恢复进度附近 Range |
+| Emby 双播放线路 | 本仓库 `compose/emby-dual-playback.override.yml` | 可选；一个 Emby，主线路 rclone，备用端口 CD2，详见 `docs/emby-dual-playback-lines.md` |
 | Emby STRM 图片和元素补齐监控 | 本仓库 `scripts/install-emby-strm-image-fixer.sh` | 默认安装为 systemd timer，补齐本地图片名并请求 Emby 刷新缺失元素 |
 | Emby STRM 中文标题、简介等修正工具 | 本仓库 `scripts/fix-emby-strm-chinese-titles.sh` | 保留的手动兼容工具，会备份数据库后修正标题；全新安装默认使用元数据守护 |
 | Emby 元数据守护 | 本仓库 `scripts/install-emby-metadata-guard.sh` | 默认安装为 systemd timer，优先修正 NFO 并生成缺失元素审计报告 |
