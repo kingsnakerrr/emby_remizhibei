@@ -4,6 +4,8 @@ services:
     container_name: emby-tg-notifier
     restart: unless-stopped
     ports:
+      # 直接 HTTP 使用下面一行；如果前面有 HTTPS Nginx，改成
+      # "127.0.0.1:8787:8787" 并设置 SESSION_HTTPS_ONLY=1。
       - "8787:8787"
     volumes:
       - ./data:/data
@@ -15,3 +17,4 @@ services:
       - TZ=Asia/Shanghai
       - DB_PATH=/data/app.db
       - SESSION_SECRET_FILE=/data/session_secret
+      - SESSION_HTTPS_ONLY=0

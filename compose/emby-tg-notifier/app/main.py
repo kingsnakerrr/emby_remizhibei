@@ -28,6 +28,9 @@ from starlette.middleware.sessions import SessionMiddleware
 
 DB_PATH = os.getenv("DB_PATH", "/data/app.db")
 SESSION_SECRET_FILE = os.getenv("SESSION_SECRET_FILE", "/data/session_secret")
+SESSION_HTTPS_ONLY = os.getenv("SESSION_HTTPS_ONLY", "0").strip().lower() in {
+    "1", "true", "yes", "on"
+}
 WEBHOOK_LOG_DIR = "/data/webhooks"
 LOCAL_DOCKER_NETWORK = "emby-notify-net"
 
@@ -52,7 +55,12 @@ def load_or_create_session_secret():
     return s
 
 app = FastAPI(title="Emby Telegram Notifier")
-app.add_middleware(SessionMiddleware, secret_key=load_or_create_session_secret(), same_site="lax")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=load_or_create_session_secret(),
+    same_site="lax",
+    https_only=SESSION_HTTPS_ONLY,
+)
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 
 
