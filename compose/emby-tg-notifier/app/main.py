@@ -33,6 +33,7 @@ SESSION_HTTPS_ONLY = os.getenv("SESSION_HTTPS_ONLY", "0").strip().lower() in {
 }
 WEBHOOK_LOG_DIR = "/data/webhooks"
 LOCAL_DOCKER_NETWORK = "emby-notify-net"
+LOCAL_EMBY_CONTAINER = os.getenv("LOCAL_EMBY_CONTAINER", "").strip()
 
 # Keep strong references to delayed cleanup tasks.  asyncio only keeps weak
 # references to tasks created with create_task(); without this set a 10-second
@@ -1859,6 +1860,45 @@ def ensure_local_network():
         return False, str(e)
 
 
+def ensure_configured_emby_network():
+    """Keep the configured Emby container on the notifier network.
+
+    A manually attached Docker network is lost whenever Emby is recreated.
+    This idempotent repair lets the internal webhook hostname remain stable.
+    """
+    if not LOCAL_EMBY_CONTAINER:
+        return True, "未配置自动连接的 Emby 容器"
+
+    client = docker_client()
+    if not client:
+        return False, "Docker socket 不可用"
+
+    ok, message = ensure_local_network()
+    if not ok:
+        return False, message
+
+    try:
+        network = client.networks.get(LOCAL_DOCKER_NETWORK)
+        target = client.containers.get(LOCAL_EMBY_CONTAINER)
+        target.reload()
+        current = set(
+            (target.attrs.get("NetworkSettings", {}).get("Networks") or {}).keys()
+        )
+        if LOCAL_DOCKER_NETWORK not in current:
+            network.connect(target)
+        return True, LOCAL_DOCKER_NETWORK
+    except Exception as e:
+        return False, str(e)
+
+
+async def local_network_repair_worker():
+    while True:
+        ok, message = ensure_configured_emby_network()
+        if not ok:
+            print(f"Docker network auto-repair failed: {message}")
+        await asyncio.sleep(30)
+
+
 def detect_local_emby_containers():
     """
     Detect likely Emby containers and whether they share a network with
@@ -2459,6 +2499,8 @@ async def startup():
     # Best-effort: on every container start/recreate, automatically reconnect
     # the notifier itself to emby-notify-net. No SSH command is required.
     ensure_local_network()
+    ensure_configured_emby_network()
+    asyncio.create_task(local_network_repair_worker())
     asyncio.create_task(tv_batch_worker())
     asyncio.create_task(telegram_binding_manager())
     spawn_background(telegram_cleanup_worker())

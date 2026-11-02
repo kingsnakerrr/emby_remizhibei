@@ -18,3 +18,5 @@ services:
       - DB_PATH=/data/app.db
       - SESSION_SECRET_FILE=/data/session_secret
       - SESSION_HTTPS_ONLY=0
+      # 本机 Emby 容器名；填写后会自动维护 emby-notify-net，防止重建后 Webhook 失联。
+      - LOCAL_EMBY_CONTAINER=

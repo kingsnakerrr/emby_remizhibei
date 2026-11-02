@@ -19,6 +19,11 @@ ports:
   - "127.0.0.1:8787:8787"
 environment:
   - SESSION_HTTPS_ONLY=1
+  - LOCAL_EMBY_CONTAINER=emby
 ```
+
+`LOCAL_EMBY_CONTAINER` 会让通知程序每 30 秒检查一次专用 Docker 网络；如果
+Emby 因升级或 Compose 重建而丢失手工网络连接，程序会自动重新接入，保证
+`http://emby-tg-notifier:8787/webhook/...` 这种内网 Webhook 持续可解析。
 
 不要把管理员密码、Bot Token、Emby API Key 或会话密钥提交到 GitHub。
