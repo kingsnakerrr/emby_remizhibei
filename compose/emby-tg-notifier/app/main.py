@@ -34,6 +34,7 @@ SESSION_HTTPS_ONLY = os.getenv("SESSION_HTTPS_ONLY", "0").strip().lower() in {
 WEBHOOK_LOG_DIR = "/data/webhooks"
 LOCAL_DOCKER_NETWORK = "emby-notify-net"
 TV_BATCH_LOCK = asyncio.Lock()
+TV_BATCH_PROGRESS_MAX_TTL_SECONDS = 600
 LOCAL_EMBY_CONTAINER = os.getenv("LOCAL_EMBY_CONTAINER", "").strip()
 
 # Keep strong references to delayed cleanup tasks.  asyncio only keeps weak
@@ -1608,6 +1609,15 @@ def _series_batch_key(item: dict) -> str:
     return str(item.get("SeriesId") or item.get("SeriesName") or item.get("ParentId") or "").strip()
 
 
+def tv_batch_progress_ttl(server: dict) -> int:
+    """Keep progress notices briefly; the final batch summary remains."""
+    try:
+        quiet_seconds = max(60, int(server.get("tv_batch_minutes") or 30) * 60)
+    except (TypeError, ValueError):
+        quiet_seconds = 30 * 60
+    return min(TV_BATCH_PROGRESS_MAX_TTL_SECONDS, quiet_seconds)
+
+
 def _episode_range_text(numbers):
     nums = sorted({int(x) for x in numbers if x is not None})
     if not nums:
@@ -3063,6 +3073,15 @@ async def webhook(server_id: int, token: str, request: Request):
                                              (json.dumps([notice["message_id"]]), pending["id"]))
                                 conn.commit()
                                 conn.close()
+                                # The progress card is temporary. Finalization also deletes it,
+                                # while this persistent fallback prevents a long upload or a
+                                # restart from leaving many season cards in the channel.
+                                bot_delete_message_later(
+                                    effective_bot_token_for_server(server),
+                                    str(r["chat_id"]),
+                                    notice["message_id"],
+                                    tv_batch_progress_ttl(dict(server)),
+                                )
                         except Exception as error:
                             print(f"TV batch progress notice failed: {type(error).__name__}")
             else:

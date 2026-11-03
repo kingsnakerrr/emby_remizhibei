@@ -37,6 +37,11 @@ class NotificationFormatTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(value,text)
         self.assertNotIn('绑定 Emby',text)
 
+    def test_tv_batch_progress_notice_has_bounded_ttl(self):
+        self.assertEqual(m.tv_batch_progress_ttl({'tv_batch_minutes': 30}), 600)
+        self.assertEqual(m.tv_batch_progress_ttl({'tv_batch_minutes': 5}), 300)
+        self.assertEqual(m.tv_batch_progress_ttl({'tv_batch_minutes': 1}), 60)
+
     async def test_episode_description_prefers_season_then_series(self):
         full={'Id':'42','Type':'Episode','Name':'第一集','ParentId':'season-2','SeriesId':'series-1',
               'Overview':'单集简介','Genres':['单集类型'],
