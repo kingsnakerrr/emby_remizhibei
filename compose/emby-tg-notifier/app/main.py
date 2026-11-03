@@ -33,6 +33,7 @@ SESSION_HTTPS_ONLY = os.getenv("SESSION_HTTPS_ONLY", "0").strip().lower() in {
 }
 WEBHOOK_LOG_DIR = "/data/webhooks"
 LOCAL_DOCKER_NETWORK = "emby-notify-net"
+TV_BATCH_LOCK = asyncio.Lock()
 LOCAL_EMBY_CONTAINER = os.getenv("LOCAL_EMBY_CONTAINER", "").strip()
 
 # Keep strong references to delayed cleanup tasks.  asyncio only keeps weak
@@ -1660,14 +1661,18 @@ def format_tv_batch_caption(series_name: str, season, episodes: dict, last_item:
         lines.append(f"📝 简介：{html.escape(overview)}")
     lines.extend([
         "",
-        "📥 <b>Emby 批量入库完成</b>",
+        "📥 <b>Emby 本批入库汇总</b>",
         "🏷 类别：TVshow",
         f"📦 本次入库：{len(nums)}集",
     ])
     quality = _tv_batch_quality(last_item)
     if quality:
         lines.append(f"🌟 质量：{html.escape(quality)}")
-    total_size = sum(int((episodes.get(str(n)) or {}).get("size") or 0) for n in nums)
+    unique_files = {}
+    for n in nums:
+        entry = episodes.get(str(n)) or {}
+        unique_files[entry.get("item_id") or str(n)] = entry
+    total_size = sum(int(entry.get("size") or 0) for entry in unique_files.values())
     if total_size:
         lines.append(f"💾 总大小：{bytes_size(total_size)}")
     return "\n".join(lines)
@@ -1716,11 +1721,17 @@ def record_tv_batch(server: dict, route: dict, sent: dict):
     ).fetchone()
     episodes = json.loads(row["episodes_json"] or "{}") if row else {}
     message_ids = json.loads(row["message_ids_json"] or "[]") if row else []
-    episodes[str(ep)] = {
+    end = item.get("IndexNumberEnd") or ep
+    try:
+        numbers = range(int(ep), max(int(ep), int(end)) + 1)
+    except (ValueError, TypeError):
+        numbers = [ep]
+    for number in numbers:
+        episodes[str(number)] = {
         "size": _episode_size_bytes(item),
         "item_id": str(item.get("Id") or ""),
         "name": str(item.get("Name") or ""),
-    }
+        }
     for mid in sent.get("message_ids") or []:
         if mid not in message_ids:
             message_ids.append(mid)
@@ -1746,6 +1757,16 @@ def record_tv_batch(server: dict, route: dict, sent: dict):
 
 
 async def finalize_tv_batch(row: dict):
+    async with TV_BATCH_LOCK:
+        conn = db()
+        current = conn.execute("SELECT * FROM tv_batches WHERE id=?", (row["id"],)).fetchone()
+        conn.close()
+        if not current or current["last_seen_at"] != row["last_seen_at"]:
+            return
+        await _finalize_tv_batch_locked(dict(current))
+
+
+async def _finalize_tv_batch_locked(row: dict):
     server = get_server(int(row["server_id"]))
     if not server:
         return
@@ -1757,7 +1778,7 @@ async def finalize_tv_batch(row: dict):
         episodes, message_ids, last_item = {}, [], {}
 
     # One episode means a real single-episode arrival: keep the original notification as-is.
-    if len(episodes) <= 1:
+    if len(episodes) <= 1 and message_ids:
         conn = db()
         conn.execute("DELETE FROM tv_batches WHERE id=?", (row["id"],))
         conn.commit()
@@ -1766,7 +1787,6 @@ async def finalize_tv_batch(row: dict):
 
     # For a batch: first try to remove all temporary single-episode notifications,
     # then send one NEW summary so Telegram generates a fresh notification.
-    await tg_delete_messages(server, str(row["chat_id"]), message_ids)
     await tg_send_tv_batch(
         server,
         str(row["chat_id"]),
@@ -1775,6 +1795,7 @@ async def finalize_tv_batch(row: dict):
         episodes,
         last_item,
     )
+    await tg_delete_messages(server, str(row["chat_id"]), message_ids)
     conn = db()
     conn.execute("DELETE FROM tv_batches WHERE id=?", (row["id"],))
     conn.commit()
@@ -3019,9 +3040,33 @@ async def webhook(server_id: int, token: str, request: Request):
     sent_count = 0
     for r in routes:
         try:
-            sent = await tg_send(server, r["chat_id"], item)
-            if str((sent.get("item") or {}).get("Type") or "").lower() == "episode":
-                record_tv_batch(server, dict(r), sent)
+            enriched = await enrich_item_for_notification(server, item)
+            if (str(enriched.get("Type") or "").lower() == "episode"
+                    and _series_batch_key(enriched) and _episode_number(enriched) is not None):
+                async with TV_BATCH_LOCK:
+                    record_tv_batch(server, dict(r), {"item": enriched, "message_ids": []})
+                    conn = db()
+                    pending = conn.execute(
+                        "SELECT * FROM tv_batches WHERE server_id=? AND route_id=? AND series_key=? AND season_key=?",
+                        (server["id"], r["id"], _series_batch_key(enriched), str(_season_number(enriched)))
+                    ).fetchone()
+                    conn.close()
+                    if pending and len(json.loads(pending["episodes_json"])) >= 2 and not json.loads(pending["message_ids_json"]):
+                        try:
+                            notice = await tg_send_text(server, str(r["chat_id"]),
+                                "📥 <b>正在接收入库</b>\n" + html.escape(str(enriched.get("SeriesName") or "电视剧"))
+                                + " · S" + str(_season_number(enriched)).zfill(2)
+                                + "\n正在合并本批剧集，静默等待结束后发送集号汇总。")
+                            if isinstance(notice, dict) and notice.get("message_id"):
+                                conn = db()
+                                conn.execute("UPDATE tv_batches SET message_ids_json=? WHERE id=?",
+                                             (json.dumps([notice["message_id"]]), pending["id"]))
+                                conn.commit()
+                                conn.close()
+                        except Exception as error:
+                            print(f"TV batch progress notice failed: {type(error).__name__}")
+            else:
+                await tg_send(server, r["chat_id"], enriched)
             sent_count += 1
             results.append({"route": r["id"], "ok": True})
         except Exception as e:
@@ -3030,7 +3075,7 @@ async def webhook(server_id: int, token: str, request: Request):
             print(f"[notification failed] server={server_id} route={r['id']}: {reason}")
 
     failures = [r for r in results if not r["ok"]]
-    detail = f"入库事件处理完成，匹配媒体库 {library_id}，Telegram 成功发送 {sent_count} 个任务"
+    detail = f"入库事件处理完成，匹配媒体库 {library_id}，成功处理 {sent_count} 个任务（剧集等待批次汇总）"
     if not routes:
         detail += "；该媒体库没有启用的通知任务"
     if failures:
