@@ -1,5 +1,8 @@
 # Emby 团队盘一键安装器
 
+MoviePilot 动漫全集绝对集数自动分季补丁见
+[docs/moviepilot-absolute-season-remap.md](docs/moviepilot-absolute-season-remap.md)。
+
 这是为 Ubuntu/Debian VPS 准备的 Emby 团队盘播放环境安装器，用于部署并恢复：
 
 - CloudDrive2 挂载 Google 团队盘；
