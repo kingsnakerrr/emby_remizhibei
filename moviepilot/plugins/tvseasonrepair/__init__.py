@@ -255,10 +255,12 @@ class TVSeasonRepair(_PluginBase):
         message = self.get_data("last_message") or "先点击扫描；扫描不会修改任何文件。"
         content = [
             {"component": "VAlert", "props": {"type": "info", "variant": "tonal", "class": "mb-4"}, "text": message},
+            {"component": "VAlert", "props": {"type": "warning", "variant": "tonal", "class": "mb-4"},
+             "text": "网盘修复通常需要几十秒到数分钟。MoviePilot 原生插件页不会实时刷新进度，请勿重复点击；完成后关闭再打开本页查看结果和回滚记录。"},
             {"component": "div", "props": {"class": "mb-4"}, "content": [
                 self._button("扫描现有媒体库", "scan", {}),
                 self._button("预览全部绿色项目", "batch", {"execute": False}, "info"),
-                self._button("批量修复全部绿色项目", "batch", {"execute": True}, "success"),
+                self._button("确认批量修复（耗时）", "batch", {"execute": True}, "success"),
             ]},
         ]
         for row in rows:
@@ -279,7 +281,7 @@ class TVSeasonRepair(_PluginBase):
             if row.get("safe"):
                 card["content"].append({"component": "VCardActions", "content": [
                     self._button("只预览", "apply", {"series_rel": row["series_rel"], "execute": False}, "info"),
-                    self._button("修复这一部", "apply", {"series_rel": row["series_rel"], "execute": True}, "success"),
+                    self._button("确认修复（勿重复点）", "apply", {"series_rel": row["series_rel"], "execute": True}, "success"),
                 ]})
             content.append(card)
         actions = [item for item in (self.get_data("actions") or []) if item.get("mode") == "cloud-root-v2"]
