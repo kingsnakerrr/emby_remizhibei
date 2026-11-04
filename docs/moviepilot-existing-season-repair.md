@@ -6,6 +6,8 @@
 
 `下载完成 -> MoviePilot 整理/上传 -> 修复助手扫描 -> 人工确认 -> 暂停 Symedia -> CloudDrive2 网盘真文件分季/改名 -> 删除并重建本地 STRM/NFO/图片 -> 恢复 Symedia -> Emby 重扫`
 
+扫描与安全判断始终以 CloudDrive2 网盘真实视频为准，不以本地 STRM 为准。这样旧版曾经只修改本地 STRM 的项目仍会再次被发现并完成根治。
+
 它不会介入正在下载或搬运的源文件。只处理已经完整进入 `symedia_gd/tvshows` 的项目；执行期间暂停 Symedia，避免“一边移动一边生成 STRM”的竞争问题。
 
 ## 安全边界

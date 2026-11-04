@@ -125,11 +125,47 @@ def _scan_series(path: Path) -> dict:
     }
 
 
+def _scan_cloud_series(path: Path) -> dict:
+    episodes: dict[int, set[int]] = {}
+    video_count = 0
+    for file in path.rglob("*"):
+        if not file.is_file() or file.suffix.lower() not in VIDEO_SUFFIXES:
+            continue
+        match = EP_RE.search(file.name)
+        if not match:
+            continue
+        season = int(match.group("season"))
+        episode = int(match.group("episode"))
+        episodes.setdefault(season, set()).add(episode)
+        video_count += 1
+    seasons = []
+    for season, values in sorted(episodes.items()):
+        ordered = sorted(values)
+        missing = [n for n in range(ordered[0], ordered[-1] + 1) if n not in values] if ordered else []
+        seasons.append({
+            "season": season,
+            "count": len(ordered),
+            "min": ordered[0] if ordered else 0,
+            "max": ordered[-1] if ordered else 0,
+            "missing": missing[:100],
+            "contiguous_from_one": ordered == list(range(1, len(ordered) + 1)),
+        })
+    tmdb = TMDB_RE.search(path.name)
+    return {
+        "series_rel": path.relative_to(CLOUD_ROOT.resolve()).as_posix(),
+        "name": re.sub(r"\s*\{tmdb-\d+\}\s*$", "", path.name, flags=re.I),
+        "tmdb_id": int(tmdb.group(1)) if tmdb else 0,
+        "strm_count": video_count,
+        "seasons": seasons,
+        "source": "cloud",
+    }
+
+
 def _series_dirs() -> list[Path]:
-    if not ROOT.exists():
+    if not CLOUD_ROOT.exists():
         return []
     found = []
-    for path in ROOT.rglob("*"):
+    for path in CLOUD_ROOT.rglob("*"):
         if path.is_dir() and TMDB_RE.search(path.name):
             found.append(path)
     return found
@@ -138,8 +174,11 @@ def _series_dirs() -> list[Path]:
 @router.post("/scan")
 async def scan(request: Request):
     _authorize(request)
-    rows = [_scan_series(path) for path in _series_dirs()]
-    return {"root": str(ROOT), "series": [row for row in rows if row["strm_count"]]}
+    rows = [_scan_cloud_series(path) for path in _series_dirs()]
+    return {
+        "root": str(CLOUD_ROOT), "source": "cloud",
+        "series": [row for row in rows if row["strm_count"]],
+    }
 
 
 def _target_name(name: str, source_season: int, absolute_episode: int,
@@ -157,7 +196,9 @@ def _build_exact_plan(series: Path, cloud_series: Path,
     official_counts = [int(x) for x in official_counts if int(x) > 0]
     if len(official_counts) < 2:
         raise HTTPException(status_code=409, detail="official season list is incomplete")
-    scanned = _scan_series(series)
+    # CloudDrive2 is canonical.  The local STRM tree may already have been
+    # cosmetically fixed by an older release and must not hide a bad cloud layout.
+    scanned = _scan_cloud_series(cloud_series)
     if len(scanned["seasons"]) != 1:
         raise HTTPException(status_code=409, detail="exact repair requires one flattened source season")
     source = scanned["seasons"][0]
@@ -302,6 +343,7 @@ async def apply_exact(request: Request):
     with tarfile.open(backup, "w:gz") as archive:
         archive.add(series, arcname=series.name)
     manifest = {
+        "mode": "cloud-root-v2",
         "action_id": action_id,
         "series_rel": series.relative_to(ROOT.resolve()).as_posix(),
         "cloud_series_rel": cloud_series.relative_to(CLOUD_ROOT.resolve()).as_posix(),
@@ -337,7 +379,7 @@ async def apply_exact(request: Request):
             _symedia_start()
     refresh_message = _refresh_emby()
     return {
-        "ok": True, "action_id": action_id, "move_count": len(moves),
+        "ok": True, "mode": "cloud-root-v2", "action_id": action_id, "move_count": len(moves),
         "video_move_count": sum(1 for src, _ in moves if src.suffix.lower() in VIDEO_SUFFIXES),
         "backup": str(backup), "refresh_message": refresh_message,
     }
@@ -352,6 +394,8 @@ async def undo(action_id: str, request: Request):
     if not manifest_path.exists():
         raise HTTPException(status_code=404, detail="repair action not found")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("mode") != "cloud-root-v2":
+        raise HTTPException(status_code=409, detail="legacy metadata-only action cannot be undone by cloud repair")
     series = _series_path(manifest["series_rel"])
     backup = Path(manifest["backup"])
     moves = [(_inside_cloud(Path(item["from"])), _inside_cloud(Path(item["to"]))) for item in manifest["moves"]]

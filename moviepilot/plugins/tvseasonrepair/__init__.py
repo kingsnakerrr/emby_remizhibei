@@ -159,7 +159,9 @@ class TVSeasonRepair(_PluginBase):
             return {"success": False, "message": "该项目不是绿色安全项目，拒绝自动修改。"}
         approvals = self.get_data("preview_approvals") or {}
         if execute and time.time() - float(approvals.get(key) or 0) > 1800:
-            return {"success": False, "message": "请先点“只预览”；预览成功后 30 分钟内才能执行网盘修复。"}
+            message = "请先点“只预览”；预览成功后 30 分钟内才能执行网盘修复。"
+            self.save_data("last_message", message)
+            return {"success": False, "message": message}
         try:
             result = self._post("apply-exact", {
                 "series_rel": key,
@@ -168,7 +170,7 @@ class TVSeasonRepair(_PluginBase):
             })
             if execute:
                 actions = self.get_data("actions") or []
-                actions.insert(0, {"name": row["name"], "action_id": result["action_id"]})
+                actions.insert(0, {"name": row["name"], "action_id": result["action_id"], "mode": result.get("mode")})
                 self.save_data("actions", actions[:30])
                 approvals.pop(key, None)
                 self.save_data("preview_approvals", approvals)
@@ -209,7 +211,7 @@ class TVSeasonRepair(_PluginBase):
         if execute and done:
             actions = self.get_data("actions") or []
             for item in done:
-                actions.insert(0, {"name": item["row"]["name"], "action_id": item["result"]["action_id"]})
+                actions.insert(0, {"name": item["row"]["name"], "action_id": item["result"]["action_id"], "mode": item["result"].get("mode")})
                 approvals.pop(item["row"]["series_rel"], None)
             self.save_data("actions", actions[:30])
             completed_keys = {item["row"]["series_rel"] for item in done}
@@ -280,7 +282,7 @@ class TVSeasonRepair(_PluginBase):
                     self._button("修复这一部", "apply", {"series_rel": row["series_rel"], "execute": True}, "success"),
                 ]})
             content.append(card)
-        actions = self.get_data("actions") or []
+        actions = [item for item in (self.get_data("actions") or []) if item.get("mode") == "cloud-root-v2"]
         if actions:
             content.append({"component": "VDivider", "props": {"class": "my-4"}})
             content.append({"component": "h3", "text": "最近修复（可回滚）"})
