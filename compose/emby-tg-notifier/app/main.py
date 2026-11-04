@@ -25,7 +25,7 @@ from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from .season_repair import router as season_repair_router
+from .season_repair import router as season_repair_router, notification_suppressed
 
 DB_PATH = os.getenv("DB_PATH", "/data/app.db")
 SESSION_SECRET_FILE = os.getenv("SESSION_SECRET_FILE", "/data/session_secret")
@@ -3053,6 +3053,9 @@ async def webhook(server_id: int, token: str, request: Request):
     for r in routes:
         try:
             enriched = await enrich_item_for_notification(server, item)
+            if notification_suppressed(enriched):
+                results.append({"route": r["id"], "ok": True, "ignored": "season_repair"})
+                continue
             if (str(enriched.get("Type") or "").lower() == "episode"
                     and _series_batch_key(enriched) and _episode_number(enriched) is not None):
                 async with TV_BATCH_LOCK:

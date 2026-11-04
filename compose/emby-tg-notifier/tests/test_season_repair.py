@@ -6,6 +6,27 @@ from app import season_repair as repair
 
 
 class SeasonRepairTest(unittest.TestCase):
+    def test_notification_suppression_matches_series_and_path(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            old_root = repair.ROOT
+            old_state = repair.STATE_DIR
+            old_file = repair.SUPPRESSION_FILE
+            repair.ROOT = base / "local"
+            repair.STATE_DIR = base / "state"
+            repair.SUPPRESSION_FILE = repair.STATE_DIR / "notification_suppressions.json"
+            series = repair.ROOT / "日漫" / "测试动画 (2020) {tmdb-1}"
+            series.mkdir(parents=True)
+            try:
+                repair._register_notification_suppression(series, 600)
+                self.assertTrue(repair.notification_suppressed({"SeriesName": "测试动画"}))
+                self.assertTrue(repair.notification_suppressed({"Path": str(series / "Season 2" / "x.strm")}))
+                self.assertFalse(repair.notification_suppressed({"SeriesName": "另一部动画"}))
+            finally:
+                repair.ROOT = old_root
+                repair.STATE_DIR = old_state
+                repair.SUPPRESSION_FILE = old_file
+
     def test_cloud_plan_and_local_rebuild(self):
         with tempfile.TemporaryDirectory() as folder:
             base = Path(folder)
