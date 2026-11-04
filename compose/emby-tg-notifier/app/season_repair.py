@@ -1,8 +1,8 @@
 """Authenticated repair agent for incorrectly flattened TV seasons.
 
-Only sidecar metadata under SEASON_REPAIR_ROOT is touched.  Cloud media and
-STRM contents are never modified.  Every apply operation creates a tar backup
-and a reversible move manifest before the first rename.
+Cloud media is renamed/moved in place through CloudDrive2 first, then the local
+Symedia STRM/NFO/art tree is rebuilt from that canonical layout.  Every apply
+operation creates a local metadata backup and a reversible cloud move manifest.
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import tarfile
 import time
 from pathlib import Path
@@ -19,11 +20,18 @@ from fastapi import APIRouter, HTTPException, Request
 router = APIRouter(prefix="/season-repair", tags=["season-repair"])
 
 ROOT = Path(os.getenv("SEASON_REPAIR_ROOT", "/home/symedia_gd/tvshows"))
+CLOUD_ROOT = Path(os.getenv("SEASON_REPAIR_CLOUD_ROOT", "/cloud-tvshows"))
+CLOUD_STRM_PREFIX = Path(os.getenv(
+    "SEASON_REPAIR_CLOUD_STRM_PREFIX",
+    "/CloudNAS/CloudDrive/GoogleDrive/zero/media/symedia_gd/tvshows",
+))
 TOKEN_FILE = Path(os.getenv("SEASON_REPAIR_TOKEN_FILE", "/data/season_repair_token"))
 STATE_DIR = Path(os.getenv("SEASON_REPAIR_STATE_DIR", "/data/season-repair"))
 EP_RE = re.compile(r"(?i)S(?P<season>\d{1,3})E(?P<episode>\d{1,4})")
 TMDB_RE = re.compile(r"(?i)\{tmdb-(\d+)\}")
 ALLOWED_SUFFIXES = {".strm", ".nfo", ".jpg", ".jpeg", ".png", ".webp", ".srt", ".ass", ".ssa"}
+VIDEO_SUFFIXES = {".mp4", ".mkv", ".ts", ".iso", ".rmvb", ".avi", ".mov", ".mpeg", ".mpg", ".wmv", ".m4v", ".flv", ".m2ts"}
+CLOUD_MOVE_SUFFIXES = VIDEO_SUFFIXES | (ALLOWED_SUFFIXES - {".strm"})
 
 
 def _token() -> str:
@@ -45,12 +53,20 @@ def _authorize(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid repair token")
 
 
-def _inside_root(path: Path) -> Path:
+def _inside(path: Path, root_path: Path) -> Path:
     resolved = path.resolve()
-    root = ROOT.resolve()
+    root = root_path.resolve()
     if resolved != root and root not in resolved.parents:
         raise HTTPException(status_code=400, detail="path outside repair root")
     return resolved
+
+
+def _inside_root(path: Path) -> Path:
+    return _inside(path, ROOT)
+
+
+def _inside_cloud(path: Path) -> Path:
+    return _inside(path, CLOUD_ROOT)
 
 
 def _series_path(relative: str) -> Path:
@@ -60,6 +76,16 @@ def _series_path(relative: str) -> Path:
     path = _inside_root(ROOT / relative)
     if not path.is_dir():
         raise HTTPException(status_code=404, detail="series directory not found")
+    return path
+
+
+def _cloud_series_path(relative: str) -> Path:
+    relative = str(relative or "").strip().replace("\\", "/").lstrip("/")
+    if not relative or ".." in Path(relative).parts:
+        raise HTTPException(status_code=400, detail="invalid cloud series path")
+    path = _inside_cloud(CLOUD_ROOT / relative)
+    if not path.is_dir():
+        raise HTTPException(status_code=404, detail="cloud series directory not found")
     return path
 
 
@@ -123,7 +149,8 @@ def _target_name(name: str, source_season: int, absolute_episode: int,
     return updated
 
 
-def _build_exact_plan(series: Path, official_counts: list[int]) -> list[tuple[Path, Path]]:
+def _build_exact_plan(series: Path, cloud_series: Path,
+                      official_counts: list[int]) -> list[tuple[Path, Path]]:
     official_counts = [int(x) for x in official_counts if int(x) > 0]
     if len(official_counts) < 2:
         raise HTTPException(status_code=409, detail="official season list is incomplete")
@@ -142,9 +169,9 @@ def _build_exact_plan(series: Path, official_counts: list[int]) -> list[tuple[Pa
             mapping[absolute] = (season, episode)
             absolute += 1
     moves = []
-    matched_strm_count = 0
-    for path in series.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in ALLOWED_SUFFIXES:
+    matched_video_count = 0
+    for path in cloud_series.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in CLOUD_MOVE_SUFFIXES:
             continue
         match = EP_RE.search(path.name)
         if not match or int(match.group("season")) != source_season:
@@ -152,16 +179,19 @@ def _build_exact_plan(series: Path, official_counts: list[int]) -> list[tuple[Pa
         old_episode = int(match.group("episode"))
         if old_episode not in mapping:
             continue
-        if path.suffix.lower() == ".strm":
-            matched_strm_count += 1
+        if path.suffix.lower() in VIDEO_SUFFIXES:
+            matched_video_count += 1
         target_season, target_episode = mapping[old_episode]
-        target_dir = series / f"Season {target_season}"
+        target_dir = cloud_series / f"Season {target_season}"
         target = target_dir / _target_name(path.name, source_season, old_episode, target_season, target_episode)
         if target == path:
             continue
-        moves.append((_inside_root(path), _inside_root(target)))
-    if matched_strm_count != total:
-        raise HTTPException(status_code=409, detail="STRM files changed during scan; run scan again")
+        moves.append((_inside_cloud(path), _inside_cloud(target)))
+    if matched_video_count != total:
+        raise HTTPException(
+            status_code=409,
+            detail=f"cloud video count is {matched_video_count}, expected {total}; refusing repair",
+        )
     destinations = [dst for _, dst in moves]
     if len(destinations) != len(set(destinations)):
         raise HTTPException(status_code=409, detail="destination collision in repair plan")
@@ -171,18 +201,68 @@ def _build_exact_plan(series: Path, official_counts: list[int]) -> list[tuple[Pa
     return moves
 
 
+def _rebuild_local_series(series: Path, cloud_series: Path) -> None:
+    """Recreate the Symedia-style local tree from canonical cloud files."""
+    if series.exists():
+        shutil.rmtree(series)
+    series.mkdir(parents=True, exist_ok=True)
+    for cloud_file in cloud_series.rglob("*"):
+        if not cloud_file.is_file():
+            continue
+        relative = cloud_file.relative_to(cloud_series)
+        destination = series / relative
+        suffix = cloud_file.suffix.lower()
+        if suffix in VIDEO_SUFFIXES:
+            destination = destination.with_suffix(".strm")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            strm_target = CLOUD_STRM_PREFIX / cloud_series.relative_to(CLOUD_ROOT) / relative
+            destination.write_text(str(strm_target), encoding="utf-8")
+        elif suffix in (ALLOWED_SUFFIXES - {".strm"}):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(cloud_file, destination)
+
+
+def _restore_local_backup(series: Path, backup: Path) -> None:
+    if series.exists():
+        shutil.rmtree(series)
+    with tarfile.open(backup, "r:gz") as archive:
+        archive.extractall(series.parent, filter="data")
+
+
+def _symedia_stop() -> bool:
+    try:
+        import docker
+        container = docker.from_env().containers.get("symedia")
+        was_running = container.status == "running"
+        if was_running:
+            container.stop(timeout=30)
+        return was_running
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"unable to pause Symedia safely: {exc}")
+
+
+def _symedia_start() -> None:
+    try:
+        import docker
+        docker.from_env().containers.get("symedia").start()
+    except Exception as exc:
+        raise RuntimeError(f"unable to restart Symedia: {exc}")
+
+
 @router.post("/apply-exact")
 async def apply_exact(request: Request):
     _authorize(request)
     body = await request.json()
     series = _series_path(body.get("series_rel", ""))
+    cloud_series = _cloud_series_path(body.get("series_rel", ""))
     counts = body.get("official_counts") or []
-    moves = _build_exact_plan(series, counts)
+    moves = _build_exact_plan(series, cloud_series, counts)
     if body.get("preview", True):
         return {
             "preview": True,
             "move_count": len(moves),
-            "strm_count": sum(1 for src, _ in moves if src.suffix.lower() == ".strm"),
+            "video_move_count": sum(1 for src, _ in moves if src.suffix.lower() in VIDEO_SUFFIXES),
+            "metadata_move_count": sum(1 for src, _ in moves if src.suffix.lower() not in VIDEO_SUFFIXES),
             "examples": [{"from": a.name, "to": b.name} for a, b in moves[:12]],
         }
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -197,6 +277,7 @@ async def apply_exact(request: Request):
     manifest = {
         "action_id": action_id,
         "series_rel": series.relative_to(ROOT.resolve()).as_posix(),
+        "cloud_series_rel": cloud_series.relative_to(CLOUD_ROOT.resolve()).as_posix(),
         "backup": str(backup),
         "created_at": time.time(),
         "moves": [{"from": str(a), "to": str(b)} for a, b in moves],
@@ -204,18 +285,34 @@ async def apply_exact(request: Request):
     manifest_path = manifest_dir / f"{action_id}.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     completed = []
+    symedia_was_running = False
     try:
+        symedia_was_running = _symedia_stop()
         for source_path, target_path in moves:
             target_path.parent.mkdir(parents=True, exist_ok=True)
             source_path.rename(target_path)
+            if not target_path.exists():
+                raise RuntimeError(f"CloudDrive2 move was not confirmed: {target_path.name}")
             completed.append((source_path, target_path))
+        _rebuild_local_series(series, cloud_series)
     except Exception as exc:
+        try:
+            _restore_local_backup(series, backup)
+        except Exception:
+            pass
         for source_path, target_path in reversed(completed):
             if target_path.exists() and not source_path.exists():
                 source_path.parent.mkdir(parents=True, exist_ok=True)
                 target_path.rename(source_path)
         raise HTTPException(status_code=500, detail=f"repair rolled back: {exc}")
-    return {"ok": True, "action_id": action_id, "move_count": len(moves), "backup": str(backup)}
+    finally:
+        if symedia_was_running:
+            _symedia_start()
+    return {
+        "ok": True, "action_id": action_id, "move_count": len(moves),
+        "video_move_count": sum(1 for src, _ in moves if src.suffix.lower() in VIDEO_SUFFIXES),
+        "backup": str(backup),
+    }
 
 
 @router.post("/undo/{action_id}")
@@ -227,12 +324,20 @@ async def undo(action_id: str, request: Request):
     if not manifest_path.exists():
         raise HTTPException(status_code=404, detail="repair action not found")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    moves = [(_inside_root(Path(item["from"])), _inside_root(Path(item["to"]))) for item in manifest["moves"]]
+    series = _series_path(manifest["series_rel"])
+    backup = Path(manifest["backup"])
+    moves = [(_inside_cloud(Path(item["from"])), _inside_cloud(Path(item["to"]))) for item in manifest["moves"]]
     for source_path, target_path in moves:
         if source_path.exists() or not target_path.exists():
             raise HTTPException(status_code=409, detail="library changed after repair; refusing automatic undo")
-    for source_path, target_path in reversed(moves):
-        source_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.rename(source_path)
+    symedia_was_running = _symedia_stop()
+    try:
+        for source_path, target_path in reversed(moves):
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.rename(source_path)
+        _restore_local_backup(series, backup)
+    finally:
+        if symedia_was_running:
+            _symedia_start()
     manifest_path.rename(manifest_path.with_suffix(".undone.json"))
     return {"ok": True, "action_id": action_id, "restored": len(moves)}

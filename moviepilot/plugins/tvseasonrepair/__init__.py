@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 from typing import Any, Dict, List, Tuple
 
 import httpx
@@ -14,7 +15,7 @@ from app.plugins import _PluginBase
 
 class TVSeasonRepair(_PluginBase):
     plugin_name = "旧媒体季度修复助手"
-    plugin_desc = "扫描已入库剧集的错误季度，支持安全项目单个或批量修复。"
+    plugin_desc = "从网盘源文件根治错误季度，并重建 Symedia/Emby 元数据。"
     plugin_icon = "tv.png"
     plugin_version = "0.1.0"
     plugin_author = "kingsnakerrr"
@@ -53,7 +54,7 @@ class TVSeasonRepair(_PluginBase):
                     ]},
                     {"component": "VCol", "props": {"cols": 12}, "content": [
                         {"component": "VAlert", "props": {"type": "info", "variant": "tonal"},
-                         "text": "只修改 Emby 的 STRM/NFO/图片元数据目录，不改下载目录和云盘视频。只有集数与 TMDB 完全吻合的绿色项目才能自动修复。"}
+                         "text": "先在 CloudDrive2 网盘内按季度移动并改名真实视频，再重建 STRM/NFO/图片。只有集数与 TMDB 完全吻合的绿色项目才能执行。"}
                     ]},
                 ],
             }],
@@ -65,7 +66,7 @@ class TVSeasonRepair(_PluginBase):
         response = httpx.post(
             f"{self._agent_url}/season-repair/{path.lstrip('/')}",
             headers={"Authorization": f"Bearer {self._agent_token}"},
-            json=payload or {}, timeout=120,
+            json=payload or {}, timeout=1800,
         )
         response.raise_for_status()
         return response.json()
@@ -156,6 +157,9 @@ class TVSeasonRepair(_PluginBase):
         row = next((x for x in rows if x.get("series_rel") == key), None)
         if not row or not row.get("safe"):
             return {"success": False, "message": "该项目不是绿色安全项目，拒绝自动修改。"}
+        approvals = self.get_data("preview_approvals") or {}
+        if execute and time.time() - float(approvals.get(key) or 0) > 1800:
+            return {"success": False, "message": "请先点“只预览”；预览成功后 30 分钟内才能执行网盘修复。"}
         try:
             result = self._post("apply-exact", {
                 "series_rel": key,
@@ -166,9 +170,11 @@ class TVSeasonRepair(_PluginBase):
                 actions = self.get_data("actions") or []
                 actions.insert(0, {"name": row["name"], "action_id": result["action_id"]})
                 self.save_data("actions", actions[:30])
-                message = f"已修复 {row['name']}，动作号 {result['action_id']}。请在 Emby 扫描媒体库。"
+                message = f"已根治 {row['name']}：移动 {result['video_move_count']} 个网盘视频并重建本地元素，动作号 {result['action_id']}。请在 Emby 扫描媒体库。"
             else:
-                message = f"预览通过：{row['name']} 将调整 {result['strm_count']} 集、{result['move_count']} 个元数据文件。"
+                approvals[key] = time.time()
+                self.save_data("preview_approvals", approvals)
+                message = f"预览通过：{row['name']} 将移动 {result['video_move_count']} 个网盘视频、{result['metadata_move_count']} 个网盘元数据文件，然后重建本地元素。"
             self.save_data("last_message", message)
             return {"success": True, "message": message, "data": result}
         except Exception as err:
@@ -179,16 +185,24 @@ class TVSeasonRepair(_PluginBase):
     def batch(self, payload: dict = Body(default={})):
         execute = bool(payload.get("execute", False))
         rows = [x for x in (self.get_data("scan_results") or []) if x.get("safe")]
+        approvals = self.get_data("preview_approvals") or {}
         done, failed = [], []
         for row in rows:
+            if execute and time.time() - float(approvals.get(row["series_rel"]) or 0) > 1800:
+                failed.append(f"{row['name']}: 尚未预览或预览已超过 30 分钟")
+                continue
             try:
                 result = self._post("apply-exact", {
                     "series_rel": row["series_rel"], "official_counts": row["official_counts"],
                     "preview": not execute,
                 })
                 done.append({"row": row, "result": result})
+                if not execute:
+                    approvals[row["series_rel"]] = time.time()
             except Exception as err:
                 failed.append(f"{row['name']}: {err}")
+        if not execute:
+            self.save_data("preview_approvals", approvals)
         if execute and done:
             actions = self.get_data("actions") or []
             for item in done:

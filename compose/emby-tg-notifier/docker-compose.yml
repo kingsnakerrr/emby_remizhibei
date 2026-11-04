@@ -13,6 +13,8 @@ services:
       - /home/symedia_jav:/home/symedia_jav:ro
       # 旧电视剧季度修复助手：只修改 STRM/NFO/图片元数据，不接触云盘视频。
       - /home/symedia_gd/tvshows:/home/symedia_gd/tvshows:rw
+      # CloudDrive2 真文件目录；季度修复先在网盘内移动/改名，再重建本地 STRM。
+      - /CloudNAS/CloudDrive/GoogleDrive/zero/media/symedia_gd/tvshows:/cloud-tvshows:rw
       # 用于“检测本机 Emby 容器”功能。若不需要自动检测，可删除下一行。
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -23,4 +25,6 @@ services:
       # 本机 Emby 容器名；填写后会自动维护 emby-notify-net，防止重建后 Webhook 失联。
       - LOCAL_EMBY_CONTAINER=
       - SEASON_REPAIR_ROOT=/home/symedia_gd/tvshows
+      - SEASON_REPAIR_CLOUD_ROOT=/cloud-tvshows
+      - SEASON_REPAIR_CLOUD_STRM_PREFIX=/CloudNAS/CloudDrive/GoogleDrive/zero/media/symedia_gd/tvshows
       - SEASON_REPAIR_TOKEN_FILE=/data/season_repair_token
