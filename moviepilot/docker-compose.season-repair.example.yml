@@ -1,0 +1,5 @@
+services:
+  moviepilot:
+    volumes:
+      # 将本仓库插件复制到宿主机此目录后，挂载为 MoviePilot 原生插件。
+      - /opt/docker-compose/moviepilot/config/local-plugins/plugins.v2/tvseasonrepair:/app/app/plugins/tvseasonrepair:ro

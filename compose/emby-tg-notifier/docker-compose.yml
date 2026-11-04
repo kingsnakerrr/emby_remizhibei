@@ -11,6 +11,8 @@ services:
       - ./data:/data
       # v11: 只读挂载 Symedia JAV 元数据目录，用于读取同目录 NFO 的女优和影片类型标签。
       - /home/symedia_jav:/home/symedia_jav:ro
+      # 旧电视剧季度修复助手：只修改 STRM/NFO/图片元数据，不接触云盘视频。
+      - /home/symedia_gd/tvshows:/home/symedia_gd/tvshows:rw
       # 用于“检测本机 Emby 容器”功能。若不需要自动检测，可删除下一行。
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -20,3 +22,5 @@ services:
       - SESSION_HTTPS_ONLY=0
       # 本机 Emby 容器名；填写后会自动维护 emby-notify-net，防止重建后 Webhook 失联。
       - LOCAL_EMBY_CONTAINER=
+      - SEASON_REPAIR_ROOT=/home/symedia_gd/tvshows
+      - SEASON_REPAIR_TOKEN_FILE=/data/season_repair_token

@@ -25,6 +25,7 @@ from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from .season_repair import router as season_repair_router
 
 DB_PATH = os.getenv("DB_PATH", "/data/app.db")
 SESSION_SECRET_FILE = os.getenv("SESSION_SECRET_FILE", "/data/session_secret")
@@ -58,6 +59,7 @@ def load_or_create_session_secret():
     return s
 
 app = FastAPI(title="Emby Telegram Notifier")
+app.include_router(season_repair_router)
 app.add_middleware(
     SessionMiddleware,
     secret_key=load_or_create_session_secret(),
