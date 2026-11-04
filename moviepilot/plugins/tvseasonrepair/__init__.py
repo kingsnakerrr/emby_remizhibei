@@ -170,7 +170,10 @@ class TVSeasonRepair(_PluginBase):
                 actions = self.get_data("actions") or []
                 actions.insert(0, {"name": row["name"], "action_id": result["action_id"]})
                 self.save_data("actions", actions[:30])
-                message = f"已根治 {row['name']}：移动 {result['video_move_count']} 个网盘视频并重建本地元素，动作号 {result['action_id']}。请在 Emby 扫描媒体库。"
+                approvals.pop(key, None)
+                self.save_data("preview_approvals", approvals)
+                self.save_data("scan_results", [item for item in rows if item.get("series_rel") != key])
+                message = f"已根治 {row['name']}：移动 {result['video_move_count']} 个网盘视频并重建本地元素，动作号 {result['action_id']}。{result.get('refresh_message', '')}"
             else:
                 approvals[key] = time.time()
                 self.save_data("preview_approvals", approvals)
@@ -207,7 +210,11 @@ class TVSeasonRepair(_PluginBase):
             actions = self.get_data("actions") or []
             for item in done:
                 actions.insert(0, {"name": item["row"]["name"], "action_id": item["result"]["action_id"]})
+                approvals.pop(item["row"]["series_rel"], None)
             self.save_data("actions", actions[:30])
+            completed_keys = {item["row"]["series_rel"] for item in done}
+            self.save_data("scan_results", [item for item in (self.get_data("scan_results") or []) if item.get("series_rel") not in completed_keys])
+            self.save_data("preview_approvals", approvals)
         mode = "修复" if execute else "预览"
         message = f"批量{mode}完成：成功 {len(done)}，失败 {len(failed)}。"
         self.save_data("last_message", message + ((" " + "；".join(failed[:3])) if failed else ""))

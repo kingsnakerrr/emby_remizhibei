@@ -11,11 +11,13 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3
 import tarfile
 import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+import httpx
 
 router = APIRouter(prefix="/season-repair", tags=["season-repair"])
 
@@ -27,6 +29,7 @@ CLOUD_STRM_PREFIX = Path(os.getenv(
 ))
 TOKEN_FILE = Path(os.getenv("SEASON_REPAIR_TOKEN_FILE", "/data/season_repair_token"))
 STATE_DIR = Path(os.getenv("SEASON_REPAIR_STATE_DIR", "/data/season-repair"))
+DB_PATH = Path(os.getenv("DB_PATH", "/data/app.db"))
 EP_RE = re.compile(r"(?i)S(?P<season>\d{1,3})E(?P<episode>\d{1,4})")
 TMDB_RE = re.compile(r"(?i)\{tmdb-(\d+)\}")
 ALLOWED_SUFFIXES = {".strm", ".nfo", ".jpg", ".jpeg", ".png", ".webp", ".srt", ".ass", ".ssa"}
@@ -249,6 +252,30 @@ def _symedia_start() -> None:
         raise RuntimeError(f"unable to restart Symedia: {exc}")
 
 
+def _refresh_emby() -> str:
+    """Best-effort full library refresh using the notifier's configured Emby."""
+    try:
+        connection = sqlite3.connect(DB_PATH)
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT emby_url, emby_api_key FROM servers "
+            "WHERE trim(emby_url)<>'' AND trim(emby_api_key)<>'' ORDER BY id LIMIT 1"
+        ).fetchone()
+        connection.close()
+        if not row:
+            return "Emby 未配置，需手动扫描媒体库"
+        base = str(row["emby_url"]).rstrip("/")
+        response = httpx.post(
+            f"{base}/emby/Library/Refresh",
+            headers={"X-Emby-Token": str(row["emby_api_key"])},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return "已触发 Emby 媒体库扫描"
+    except Exception as exc:
+        return f"Emby 自动扫描失败，需手动扫描：{type(exc).__name__}: {exc}"
+
+
 @router.post("/apply-exact")
 async def apply_exact(request: Request):
     _authorize(request)
@@ -308,10 +335,11 @@ async def apply_exact(request: Request):
     finally:
         if symedia_was_running:
             _symedia_start()
+    refresh_message = _refresh_emby()
     return {
         "ok": True, "action_id": action_id, "move_count": len(moves),
         "video_move_count": sum(1 for src, _ in moves if src.suffix.lower() in VIDEO_SUFFIXES),
-        "backup": str(backup),
+        "backup": str(backup), "refresh_message": refresh_message,
     }
 
 
@@ -340,4 +368,7 @@ async def undo(action_id: str, request: Request):
         if symedia_was_running:
             _symedia_start()
     manifest_path.rename(manifest_path.with_suffix(".undone.json"))
-    return {"ok": True, "action_id": action_id, "restored": len(moves)}
+    return {
+        "ok": True, "action_id": action_id, "restored": len(moves),
+        "refresh_message": _refresh_emby(),
+    }
