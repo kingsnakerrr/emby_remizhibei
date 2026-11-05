@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import time
 from typing import Any, Dict, List, Tuple
+import uuid
 
 import httpx
 from fastapi import Body
@@ -17,7 +19,7 @@ class TVSeasonRepair(_PluginBase):
     plugin_name = "旧媒体季度修复助手"
     plugin_desc = "从网盘源文件根治错误季度，并重建 Symedia/Emby 元数据。"
     plugin_icon = "tv.png"
-    plugin_version = "0.1.0"
+    plugin_version = "0.2.0"
     plugin_author = "kingsnakerrr"
     author_url = "https://github.com/kingsnakerrr/emby_remizhibei"
     plugin_config_prefix = "tvseasonrepair_"
@@ -27,6 +29,8 @@ class TVSeasonRepair(_PluginBase):
     _enabled = False
     _agent_url = ""
     _agent_token = ""
+    _data_lock = threading.RLock()
+    _repair_lock = threading.Lock()
 
     def init_plugin(self, config=None):
         config = config or {}
@@ -70,6 +74,96 @@ class TVSeasonRepair(_PluginBase):
         )
         response.raise_for_status()
         return response.json()
+
+    def _jobs(self) -> list[dict]:
+        return self.get_data("repair_jobs") or []
+
+    def _update_job(self, job_id: str, **changes) -> dict | None:
+        with self._data_lock:
+            jobs = self._jobs()
+            target = next((item for item in jobs if item.get("id") == job_id), None)
+            if not target:
+                return None
+            target.update(changes)
+            target["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self.save_data("repair_jobs", jobs[:50])
+            return target
+
+    def _queue_job(self, row: dict) -> tuple[dict, bool]:
+        with self._data_lock:
+            jobs = self._jobs()
+            active = next((item for item in jobs if item.get("series_rel") == row["series_rel"]
+                           and item.get("status") in {"queued", "previewing", "running"}), None)
+            if active:
+                return active, False
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            job = {
+                "id": uuid.uuid4().hex[:12],
+                "name": row["name"],
+                "series_rel": row["series_rel"],
+                "status": "queued",
+                "message": "已加入队列，等待执行。",
+                "created_at": now,
+                "updated_at": now,
+            }
+            jobs.insert(0, job)
+            self.save_data("repair_jobs", jobs[:50])
+            return job, True
+
+    def _run_repair_job(self, job_id: str, key: str) -> None:
+        with self._repair_lock:
+            try:
+                rows = self.get_data("scan_results") or []
+                row = next((item for item in rows if item.get("series_rel") == key), None)
+                if not row or not row.get("safe"):
+                    raise RuntimeError("项目已不在绿色安全列表，请重新扫描后再试")
+                self._update_job(job_id, status="previewing", message="正在重新预览网盘文件和季度方案。")
+                preview = self._post("apply-exact", {
+                    "series_rel": key,
+                    "official_counts": row["official_counts"],
+                    "preview": True,
+                })
+                self._update_job(
+                    job_id,
+                    status="running",
+                    message=(f"预览通过，正在整理 {preview['video_move_count']} 个视频、"
+                             f"{preview['metadata_move_count']} 个元数据文件。"),
+                )
+                result = self._post("apply-exact", {
+                    "series_rel": key,
+                    "official_counts": row["official_counts"],
+                    "preview": False,
+                })
+                with self._data_lock:
+                    actions = self.get_data("actions") or []
+                    actions.insert(0, {"name": row["name"], "action_id": result["action_id"],
+                                       "mode": result.get("mode")})
+                    self.save_data("actions", actions[:30])
+                    approvals = self.get_data("preview_approvals") or {}
+                    approvals.pop(key, None)
+                    self.save_data("preview_approvals", approvals)
+                    current_rows = self.get_data("scan_results") or []
+                    self.save_data("scan_results", [item for item in current_rows
+                                                     if item.get("series_rel") != key])
+                message = (f"成功整理：移动 {result['video_move_count']} 个网盘视频并重建本地元素。"
+                           f"动作号 {result['action_id']}。{result.get('refresh_message', '')}")
+                self._update_job(job_id, status="success", message=message,
+                                 action_id=result["action_id"])
+                self.save_data("last_message", f"{row['name']} {message}")
+            except Exception as err:
+                message = f"整理失败：{type(err).__name__}: {err}"
+                self._update_job(job_id, status="failed", message=message)
+                self.save_data("last_message", message)
+                logger.error(f"季度修复任务 {job_id} 失败：{err}")
+
+    def _start_job(self, job: dict) -> None:
+        thread = threading.Thread(
+            target=self._run_repair_job,
+            args=(job["id"], job["series_rel"]),
+            name=f"tv-season-repair-{job['id']}",
+            daemon=True,
+        )
+        thread.start()
 
     @staticmethod
     def _official_counts(tmdb_id: int) -> list[int]:
@@ -157,11 +251,16 @@ class TVSeasonRepair(_PluginBase):
         row = next((x for x in rows if x.get("series_rel") == key), None)
         if not row or not row.get("safe"):
             return {"success": False, "message": "该项目不是绿色安全项目，拒绝自动修改。"}
-        approvals = self.get_data("preview_approvals") or {}
-        if execute and time.time() - float(approvals.get(key) or 0) > 1800:
-            message = "请先点“只预览”；预览成功后 30 分钟内才能执行网盘修复。"
+        if execute:
+            job, created = self._queue_job(row)
+            if created:
+                self._start_job(job)
+                message = f"已提交后台整理：{row['name']}。关闭再打开插件页可查看实时状态。"
+            else:
+                message = f"{row['name']} 已在任务队列中，请勿重复点击。"
             self.save_data("last_message", message)
-            return {"success": False, "message": message}
+            return {"success": True, "message": message, "job_id": job["id"]}
+        approvals = self.get_data("preview_approvals") or {}
         try:
             result = self._post("apply-exact", {
                 "series_rel": key,
@@ -190,6 +289,17 @@ class TVSeasonRepair(_PluginBase):
     def batch(self, payload: dict = Body(default={})):
         execute = bool(payload.get("execute", False))
         rows = [x for x in (self.get_data("scan_results") or []) if x.get("safe")]
+        if execute:
+            queued = []
+            for row in rows:
+                job, created = self._queue_job(row)
+                if created:
+                    self._start_job(job)
+                    queued.append(job)
+            message = f"已提交 {len(queued)} 个后台整理任务；任务会逐个执行，请勿重复点击。"
+            self.save_data("last_message", message)
+            return {"success": True, "message": message,
+                    "job_ids": [item["id"] for item in queued]}
         approvals = self.get_data("preview_approvals") or {}
         done, failed = [], []
         for row in rows:
@@ -263,6 +373,40 @@ class TVSeasonRepair(_PluginBase):
                 self._button("确认批量修复（耗时）", "batch", {"execute": True}, "success"),
             ]},
         ]
+        jobs = self._jobs()
+        if jobs:
+            status_labels = {
+                "queued": ("排队中", "warning"),
+                "previewing": ("正在预览", "info"),
+                "running": ("整理中", "primary"),
+                "success": ("成功整理", "success"),
+                "failed": ("整理失败", "error"),
+            }
+            job_content = [
+                {"component": "VAlert", "props": {"type": "info", "variant": "tonal", "class": "mb-3"},
+                 "text": "后台任务会持续运行。关闭再打开本页即可刷新状态，不要重复点击修复。"}
+            ]
+            for job in jobs[:20]:
+                label, color = status_labels.get(job.get("status"), (job.get("status", "未知"), "default"))
+                job_content.append({
+                    "component": "VCard", "props": {"variant": "outlined", "class": "mb-2"},
+                    "content": [
+                        {"component": "VCardTitle", "text": job.get("name", "未知项目")},
+                        {"component": "VCardSubtitle", "text": f"任务 {job.get('id')} · {job.get('updated_at', '')}"},
+                        {"component": "VCardText", "content": [
+                            {"component": "VChip", "props": {"color": color, "variant": "tonal", "class": "mb-2"},
+                             "text": label},
+                            {"component": "div", "text": job.get("message", "")},
+                        ]},
+                    ],
+                })
+            content.append({
+                "component": "VCard", "props": {"variant": "tonal", "class": "mb-4"},
+                "content": [
+                    {"component": "VCardTitle", "text": "修复任务"},
+                    {"component": "VCardText", "content": job_content},
+                ],
+            })
         for row in rows:
             color = "success" if row.get("safe") else "warning"
             label = "可安全修复" if row.get("safe") else "需人工核对"
