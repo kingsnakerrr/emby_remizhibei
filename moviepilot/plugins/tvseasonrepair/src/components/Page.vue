@@ -7,6 +7,7 @@ const message = ref('')
 const error = ref('')
 const dialog = ref('')
 const recordTab = ref('scan')
+const scanSearch = ref('')
 const state = ref({
   headline: '正在读取状态…', summary: {}, scan_results: [], active_jobs: [],
   success_jobs: [], failed_jobs: [], scan_logs: [], other_logs: [], actions: [],
@@ -20,6 +21,27 @@ const dialogOpen = computed({
 })
 const unwrap = response => response?.data?.data ?? response?.data ?? response
 const formatDuration = row => row?.duration_seconds === undefined ? '—' : `${row.duration_seconds} 秒`
+const scanHeaders = [
+  { title: '媒体', key: 'name' },
+  { title: '当前季度', key: 'current_summary', width: 230 },
+  { title: 'TMDB 季度', key: 'official_summary', width: 230 },
+  { title: '判断', key: 'status', width: 150 },
+  { title: '操作', key: 'actions', sortable: false, width: 170 },
+]
+const jobHeaders = [
+  { title: '媒体', key: 'name' },
+  { title: '开始时间', key: 'started_at', width: 190 },
+  { title: '结束时间', key: 'finished_at', width: 190 },
+  { title: '耗时', key: 'duration', width: 100 },
+  { title: '结果', key: 'message' },
+]
+const operationHeaders = [
+  { title: '任务', key: 'title', width: 190 },
+  { title: '开始时间', key: 'started_at', width: 190 },
+  { title: '结束时间', key: 'finished_at', width: 190 },
+  { title: '耗时', key: 'duration', width: 100 },
+  { title: '结果', key: 'detail' },
+]
 
 async function loadStatus(silent = false) {
   if (!silent) loading.value = true
@@ -68,16 +90,9 @@ onUnmounted(() => window.clearInterval(timer))
     <VProgressLinear v-if="loading" indeterminate class="mb-3" />
     <VAlert v-if="error" type="error" variant="tonal" closable class="mb-3">{{ error }}</VAlert>
     <VAlert v-if="message" type="success" variant="tonal" closable class="mb-3">{{ message }}</VAlert>
-    <VAlert type="info" variant="tonal" class="mb-4 headline">{{ state.headline }}</VAlert>
-
-    <div class="actions mb-4">
-      <VBtn variant="flat" color="primary" prepend-icon="mdi-magnify" @click="run('scan')">扫描媒体库</VBtn>
-      <VBtn variant="outlined" prepend-icon="mdi-eye-outline" @click="run('batch', { execute: false })">预览安全项目</VBtn>
-      <VBtn variant="outlined" prepend-icon="mdi-tools" @click="run('batch', { execute: true })">批量修复</VBtn>
-    </div>
 
     <div class="dashboard-grid">
-      <VCard class="dash-card card-scan" variant="outlined" @click="openDialog('scan')">
+      <VCard class="dash-card card-scan" @click="openDialog('scan')">
         <VCardText>
           <div class="card-label">扫描候选</div>
           <div class="card-value">{{ summary.candidate_count || 0 }}</div>
@@ -85,7 +100,7 @@ onUnmounted(() => window.clearInterval(timer))
           <VIcon class="card-arrow" icon="mdi-chevron-right" />
         </VCardText>
       </VCard>
-      <VCard class="dash-card card-active" variant="outlined" @click="openDialog('active')">
+      <VCard class="dash-card card-active" @click="openDialog('active')">
         <VCardText>
           <div class="card-label">处理中</div>
           <div class="card-value">{{ summary.active_count || 0 }}</div>
@@ -93,7 +108,7 @@ onUnmounted(() => window.clearInterval(timer))
           <VIcon class="card-arrow" icon="mdi-chevron-right" />
         </VCardText>
       </VCard>
-      <VCard class="dash-card card-result" variant="outlined" @click="openDialog('records', 'success')">
+      <VCard class="dash-card card-result" @click="openDialog('records', 'success')">
         <VCardText>
           <div class="card-label">修复结果</div>
           <div class="card-value">{{ summary.success_count || 0 }}</div>
@@ -101,7 +116,7 @@ onUnmounted(() => window.clearInterval(timer))
           <VIcon class="card-arrow" icon="mdi-chevron-right" />
         </VCardText>
       </VCard>
-      <VCard class="dash-card card-log" variant="outlined" @click="openDialog('records', 'scan')">
+      <VCard class="dash-card card-log" @click="openDialog('records', 'scan')">
         <VCardText>
           <div class="card-label">任务记录</div>
           <div class="card-value">{{ summary.log_count || 0 }}</div>
@@ -111,7 +126,16 @@ onUnmounted(() => window.clearInterval(timer))
       </VCard>
     </div>
 
-    <VDialog v-model="dialogOpen" max-width="1080" scrollable>
+    <div class="actions my-4">
+      <VBtn class="action-primary" prepend-icon="mdi-magnify" @click="run('scan')">扫描媒体库</VBtn>
+      <VBtn class="action-info" prepend-icon="mdi-eye-outline" @click="run('batch', { execute: false })">预览安全项目</VBtn>
+      <VBtn class="action-warning" prepend-icon="mdi-tools" @click="run('batch', { execute: true })">批量修复</VBtn>
+      <VBtn class="action-log" prepend-icon="mdi-text-box-outline" @click="openDialog('records', 'scan')">查看任务记录</VBtn>
+    </div>
+
+    <VAlert type="info" variant="tonal" class="headline">{{ state.headline }}</VAlert>
+
+    <VDialog v-model="dialogOpen" max-width="1240" scrollable>
       <VCard class="dialog-card">
         <VCardTitle class="dialog-title">
           <span>{{ dialog === 'scan' ? '扫描结果' : dialog === 'active' ? '处理任务' : '任务记录' }}</span>
@@ -120,30 +144,27 @@ onUnmounted(() => window.clearInterval(timer))
         <VDivider />
 
         <VCardText v-if="dialog === 'scan'" class="dialog-body">
-          <div v-if="!state.scan_results.length" class="empty">暂无候选项目</div>
-          <VCard v-for="item in state.scan_results" :key="item.series_rel" variant="outlined" class="list-card">
-            <VCardText>
-              <div class="item-title">{{ item.name }}</div>
-              <div class="item-meta">当前：{{ item.current_summary }}</div>
-              <div class="item-meta">TMDB：{{ item.official_summary }}</div>
-              <div class="item-result">{{ item.safe ? '可安全修复' : `需人工核对：${item.reason}` }}</div>
-              <div v-if="item.safe" class="item-actions">
-                <VBtn size="small" variant="outlined" @click="run('apply', { series_rel: item.series_rel, execute: false })">预览</VBtn>
-                <VBtn size="small" variant="flat" color="primary" @click="run('apply', { series_rel: item.series_rel, execute: true })">确认修复</VBtn>
+          <VAlert type="info" variant="tonal" class="mb-3">只有连续、无重复并且总集数严格等于 TMDB 正式季度合计的项目才允许自动修复。</VAlert>
+          <VTextField v-model="scanSearch" prepend-inner-icon="mdi-magnify" label="搜索媒体" variant="outlined" density="comfortable" hide-details class="mb-3" />
+          <VDataTable :headers="scanHeaders" :items="state.scan_results" :search="scanSearch" :items-per-page="20" class="data-table">
+            <template #item.status="{ item }"><span :class="item.safe ? 'status-safe' : 'status-manual'">{{ item.safe ? '可安全修复' : '人工核对' }}</span></template>
+            <template #item.actions="{ item }">
+              <div v-if="item.safe" class="table-actions">
+                <VBtn size="small" class="table-preview" @click="run('apply', { series_rel: item.series_rel, execute: false })">预览</VBtn>
+                <VBtn size="small" class="table-fix" @click="run('apply', { series_rel: item.series_rel, execute: true })">修复</VBtn>
               </div>
-            </VCardText>
-          </VCard>
+              <span v-else class="reason-text" :title="item.reason">{{ item.reason }}</span>
+            </template>
+          </VDataTable>
         </VCardText>
 
         <VCardText v-else-if="dialog === 'active'" class="dialog-body">
-          <div v-if="!state.active_jobs.length" class="empty">当前没有处理中的任务</div>
-          <VCard v-for="job in state.active_jobs" :key="job.id" variant="outlined" class="list-card">
-            <VCardText>
-              <div class="item-title">{{ job.name }}</div>
-              <div class="item-meta">开始：{{ job.started_at || job.created_at || '—' }}</div>
-              <div class="item-result">{{ job.message }}</div>
-            </VCardText>
-          </VCard>
+          <VDataTable :headers="jobHeaders" :items="state.active_jobs" :items-per-page="20" class="data-table">
+            <template #item.started_at="{ item }">{{ item.started_at || item.created_at || '—' }}</template>
+            <template #item.finished_at>—</template>
+            <template #item.duration>运行中</template>
+            <template #no-data><div class="empty">当前没有处理中的任务</div></template>
+          </VDataTable>
         </VCardText>
 
         <template v-else>
@@ -156,45 +177,11 @@ onUnmounted(() => window.clearInterval(timer))
           </VTabs>
           <VDivider />
           <VWindow v-model="recordTab" class="record-window">
-            <VWindowItem value="scan"><div class="dialog-body">
-              <div v-if="!state.scan_logs.length" class="empty">暂无扫描日志</div>
-              <VCard v-for="row in state.scan_logs" :key="row.id" variant="outlined" class="list-card"><VCardText>
-                <div class="item-title">{{ row.title }} · {{ row.status === 'success' ? '成功' : '失败' }}</div>
-                <div class="item-meta">开始 {{ row.started_at }}　结束 {{ row.finished_at || '—' }}　耗时 {{ formatDuration(row) }}</div>
-                <div class="item-result">{{ row.detail }}</div>
-              </VCardText></VCard>
-            </div></VWindowItem>
-            <VWindowItem value="success"><div class="dialog-body">
-              <div v-if="!state.success_jobs.length" class="empty">暂无成功记录</div>
-              <VCard v-for="row in state.success_jobs" :key="row.id" variant="outlined" class="list-card"><VCardText>
-                <div class="item-title">{{ row.name }}</div>
-                <div class="item-meta">开始 {{ row.started_at || row.created_at }}　结束 {{ row.finished_at || row.updated_at }}　耗时 {{ formatDuration(row) }}</div>
-                <div class="item-result">{{ row.message }}</div>
-              </VCardText></VCard>
-            </div></VWindowItem>
-            <VWindowItem value="failed"><div class="dialog-body">
-              <div v-if="!state.failed_jobs.length" class="empty">暂无失败记录</div>
-              <VCard v-for="row in state.failed_jobs" :key="row.id" variant="outlined" class="list-card"><VCardText>
-                <div class="item-title">{{ row.name }}</div>
-                <div class="item-meta">开始 {{ row.started_at || row.created_at }}　结束 {{ row.finished_at || row.updated_at }}　耗时 {{ formatDuration(row) }}</div>
-                <div class="item-result">{{ row.message }}</div>
-              </VCardText></VCard>
-            </div></VWindowItem>
-            <VWindowItem value="operation"><div class="dialog-body">
-              <div v-if="!state.other_logs.length" class="empty">暂无预览或回滚日志</div>
-              <VCard v-for="row in state.other_logs" :key="row.id" variant="outlined" class="list-card"><VCardText>
-                <div class="item-title">{{ row.title }} · {{ row.status }}</div>
-                <div class="item-meta">开始 {{ row.started_at }}　结束 {{ row.finished_at || '—' }}　耗时 {{ formatDuration(row) }}</div>
-                <div class="item-result">{{ row.detail }}</div>
-              </VCardText></VCard>
-            </div></VWindowItem>
-            <VWindowItem value="rollback"><div class="dialog-body">
-              <div v-if="!state.actions.length" class="empty">暂无可回滚记录</div>
-              <VCard v-for="row in state.actions" :key="row.action_id" variant="outlined" class="list-card"><VCardText class="rollback-row">
-                <div><div class="item-title">{{ row.name }}</div><div class="item-meta">{{ row.finished_at || '旧记录未保存完成时间' }} · {{ row.action_id }}</div></div>
-                <VBtn size="small" variant="outlined" @click="run('undo', { action_id: row.action_id })">回滚</VBtn>
-              </VCardText></VCard>
-            </div></VWindowItem>
+            <VWindowItem value="scan"><div class="dialog-body"><VDataTable :headers="operationHeaders" :items="state.scan_logs" :items-per-page="20" class="data-table"><template #item.duration="{ item }">{{ formatDuration(item) }}</template><template #no-data><div class="empty">暂无扫描日志</div></template></VDataTable></div></VWindowItem>
+            <VWindowItem value="success"><div class="dialog-body"><VDataTable :headers="jobHeaders" :items="state.success_jobs" :items-per-page="20" class="data-table"><template #item.started_at="{ item }">{{ item.started_at || item.created_at }}</template><template #item.finished_at="{ item }">{{ item.finished_at || item.updated_at }}</template><template #item.duration="{ item }">{{ formatDuration(item) }}</template><template #no-data><div class="empty">暂无成功记录</div></template></VDataTable></div></VWindowItem>
+            <VWindowItem value="failed"><div class="dialog-body"><VDataTable :headers="jobHeaders" :items="state.failed_jobs" :items-per-page="20" class="data-table"><template #item.started_at="{ item }">{{ item.started_at || item.created_at }}</template><template #item.finished_at="{ item }">{{ item.finished_at || item.updated_at }}</template><template #item.duration="{ item }">{{ formatDuration(item) }}</template><template #no-data><div class="empty">暂无失败记录</div></template></VDataTable></div></VWindowItem>
+            <VWindowItem value="operation"><div class="dialog-body"><VDataTable :headers="operationHeaders" :items="state.other_logs" :items-per-page="20" class="data-table"><template #item.duration="{ item }">{{ formatDuration(item) }}</template><template #no-data><div class="empty">暂无预览或回滚日志</div></template></VDataTable></div></VWindowItem>
+            <VWindowItem value="rollback"><div class="dialog-body"><VDataTable :headers="[{ title: '媒体', key: 'name' }, { title: '完成时间', key: 'finished_at', width: 200 }, { title: '动作号', key: 'action_id', width: 260 }, { title: '操作', key: 'actions', sortable: false, width: 100 }]" :items="state.actions" :items-per-page="20" class="data-table"><template #item.finished_at="{ item }">{{ item.finished_at || '旧记录' }}</template><template #item.actions="{ item }"><VBtn size="small" class="table-undo" @click="run('undo', { action_id: item.action_id })">回滚</VBtn></template><template #no-data><div class="empty">暂无可回滚记录</div></template></VDataTable></div></VWindowItem>
           </VWindow>
         </template>
       </VCard>
@@ -203,33 +190,42 @@ onUnmounted(() => window.clearInterval(timer))
 </template>
 
 <style scoped>
-.season-page { padding: 4px 2px 24px; }
+.season-page { padding: 6px 2px 28px; }
 .headline { min-height: 52px; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; }
-.dashboard-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.dash-card { position: relative; min-height: 134px; cursor: pointer; overflow: hidden; border-width: 1px; border-color: rgba(255,255,255,.10); box-shadow: 0 8px 24px rgba(0,0,0,.16); transition: border-color .18s, transform .18s, box-shadow .18s; }
-.dash-card::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--card-accent); }
-.card-scan { --card-accent: #4da3ff; background: linear-gradient(135deg, rgba(35,73,108,.72), rgba(24,31,42,.94)); }
-.card-active { --card-accent: #9a7cff; background: linear-gradient(135deg, rgba(65,50,103,.66), rgba(27,27,40,.94)); }
-.card-result { --card-accent: #52c79a; background: linear-gradient(135deg, rgba(38,83,68,.66), rgba(23,35,34,.94)); }
-.card-log { --card-accent: #e6a84d; background: linear-gradient(135deg, rgba(91,67,35,.66), rgba(36,31,25,.94)); }
-.dash-card:hover { border-color: rgba(var(--v-theme-primary), .65); transform: translateY(-2px); }
-.card-label { color: rgba(255,255,255,.78); font-size: .9rem; margin-bottom: 12px; }
-.card-value { color: #fff; font-size: 1.8rem; line-height: 1; font-weight: 700; }
-.card-note { margin-top: 12px; color: rgba(255,255,255,.62); font-size: .82rem; }
-.card-arrow { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); opacity: .55; }
-.dialog-card { max-height: 84vh; background: rgb(var(--v-theme-surface)); border: 1px solid rgba(255,255,255,.10); }
+.dashboard-grid { display: grid; grid-template-columns: repeat(4, minmax(170px, 1fr)); gap: 10px; max-width: 900px; }
+.dash-card { position: relative; min-height: 128px; cursor: pointer; border-radius: 12px; box-shadow: none; transition: filter .16s, transform .16s; }
+.card-scan { background: #132b3b; color: #29b6f6; }
+.card-active { background: #251d3d; color: #9b6cff; }
+.card-result { background: #172d1c; color: #62d123; }
+.card-log { background: #352c17; color: #ffb300; }
+.dash-card:hover { filter: brightness(1.14); transform: translateY(-1px); }
+.card-label { color: currentColor; font-size: .83rem; font-weight: 600; margin-bottom: 8px; }
+.card-value { color: rgba(255,255,255,.9); font-size: 1.65rem; line-height: 1; font-weight: 750; }
+.card-note { margin-top: 14px; color: currentColor; font-size: .78rem; line-height: 1.35; }
+.card-arrow { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: currentColor; }
+.action-primary, .action-info, .action-warning, .action-log { border-radius: 6px; box-shadow: none; }
+.action-primary { background: #40206d; color: #b985ff; }
+.action-info { background: #102d3d; color: #28b9ef; }
+.action-warning { background: #372b12; color: #ffb300; }
+.action-log { background: #211936; color: #a56df5; }
+.dialog-card { max-height: 88vh; background: #12131c; border: 1px solid rgba(255,255,255,.08); }
 .dialog-title { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; }
-.dialog-body { padding: 18px; max-height: 66vh; overflow-y: auto; }
-.record-tabs { padding: 0 10px; }
+.dialog-body { padding: 16px; max-height: 72vh; overflow-y: auto; }
+.record-tabs { padding: 0 12px; background: #12131c; }
 .record-window { min-height: 260px; }
-.list-card { margin-bottom: 10px; background: rgba(var(--v-theme-surface-variant), .34); border-color: rgba(255,255,255,.10); box-shadow: 0 5px 16px rgba(0,0,0,.12); }
-.item-title { font-weight: 650; margin-bottom: 7px; }
-.item-meta { color: rgb(var(--v-theme-on-surface-variant)); font-size: .82rem; line-height: 1.6; }
-.item-result { margin-top: 8px; white-space: pre-wrap; line-height: 1.55; }
-.item-actions { display: flex; gap: 8px; margin-top: 12px; }
-.rollback-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.data-table { background: transparent; }
+.data-table :deep(thead th) { color: rgba(255,255,255,.82); font-size: .8rem; border-bottom-color: rgba(255,255,255,.12) !important; }
+.data-table :deep(tbody td) { color: rgba(255,255,255,.68); border-bottom-color: rgba(255,255,255,.09) !important; }
+.data-table :deep(tbody tr:hover) { background: rgba(255,255,255,.035); }
+.table-actions { display: flex; gap: 6px; }
+.table-preview { background: #211936; color: #a56df5; }
+.table-fix { background: #17311c; color: #69d62c; }
+.table-undo { background: #351b20; color: #ff5c67; }
+.status-safe { color: #69d62c; }
+.status-manual { color: #ffb300; }
+.reason-text { display: inline-block; max-width: 160px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #ffb300; }
 .empty { padding: 40px 12px; text-align: center; color: rgb(var(--v-theme-on-surface-variant)); }
-@media (max-width: 900px) { .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 900px) { .dashboard-grid { grid-template-columns: repeat(2, minmax(170px, 1fr)); } }
 @media (max-width: 560px) { .dashboard-grid { grid-template-columns: 1fr; } .dash-card { min-height: 112px; } }
 </style>
