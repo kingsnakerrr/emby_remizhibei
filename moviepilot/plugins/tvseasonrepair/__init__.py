@@ -19,7 +19,7 @@ class TVSeasonRepair(_PluginBase):
     plugin_name = "旧媒体季度修复助手"
     plugin_desc = "从网盘源文件根治错误季度，并重建 Symedia/Emby 元数据。"
     plugin_icon = "tv.png"
-    plugin_version = "0.3.0"
+    plugin_version = "0.4.0"
     plugin_author = "kingsnakerrr"
     author_url = "https://github.com/kingsnakerrr/emby_remizhibei"
     plugin_config_prefix = "tvseasonrepair_"
@@ -432,12 +432,52 @@ class TVSeasonRepair(_PluginBase):
             self._set_headline(f"回滚失败：{action_id}，{type(err).__name__}。")
             return {"success": False, "message": message}
 
+    def ui_status(self):
+        rows = self.get_data("scan_results") or []
+        jobs = self._jobs()
+        operations = self.get_data("operation_logs") or []
+        actions = self.get_data("actions") or []
+        active_states = {"queued", "previewing", "running"}
+        active = [item for item in jobs if item.get("status") in active_states]
+        success_jobs = [item for item in jobs if item.get("status") == "success"]
+        failed_jobs = [item for item in jobs if item.get("status") == "failed"]
+        scan_logs = [item for item in operations if item.get("kind") == "scan"]
+        other_logs = [item for item in operations if item.get("kind") != "scan"]
+        return {
+            "success": True,
+            "data": {
+                "headline": self.get_data("last_message") or "尚未执行扫描。",
+                "summary": {
+                    "candidate_count": len(rows),
+                    "safe_count": sum(1 for item in rows if item.get("safe")),
+                    "active_count": len(active),
+                    "success_count": len(success_jobs),
+                    "failed_count": len(failed_jobs),
+                    "log_count": len(operations),
+                    "rollback_count": len(actions),
+                },
+                "scan_results": rows,
+                "active_jobs": active,
+                "success_jobs": success_jobs,
+                "failed_jobs": failed_jobs,
+                "scan_logs": scan_logs,
+                "other_logs": other_logs,
+                "actions": actions,
+            },
+        }
+
+    @staticmethod
+    def get_render_mode() -> Tuple[str, str]:
+        return "vue", "dist/assets"
+
     def get_api(self) -> List[Dict[str, Any]]:
         return [
-            {"path": "/scan", "endpoint": self.scan, "methods": ["POST"], "summary": "扫描季度异常"},
-            {"path": "/apply", "endpoint": self.apply, "methods": ["POST"], "summary": "预览或修复单项"},
-            {"path": "/batch", "endpoint": self.batch, "methods": ["POST"], "summary": "预览或修复全部安全项"},
-            {"path": "/undo", "endpoint": self.undo, "methods": ["POST"], "summary": "回滚修复"},
+            {"path": "/ui_status", "endpoint": self.ui_status, "methods": ["POST"], "auth": "bear",
+             "summary": "获取季度修复界面状态"},
+            {"path": "/scan", "endpoint": self.scan, "methods": ["POST"], "auth": "bear", "summary": "扫描季度异常"},
+            {"path": "/apply", "endpoint": self.apply, "methods": ["POST"], "auth": "bear", "summary": "预览或修复单项"},
+            {"path": "/batch", "endpoint": self.batch, "methods": ["POST"], "auth": "bear", "summary": "预览或修复全部安全项"},
+            {"path": "/undo", "endpoint": self.undo, "methods": ["POST"], "auth": "bear", "summary": "回滚修复"},
         ]
 
     @staticmethod
