@@ -235,17 +235,17 @@ def _scan_cloud_series(path: Path) -> dict:
     }
 
 
-def _series_dirs() -> list[Path]:
-    if not CLOUD_ROOT.exists():
+def _series_dirs(root: Path = CLOUD_ROOT) -> list[Path]:
+    if not root.exists():
         return []
     found = []
     # Stop descending as soon as a TMDB-tagged series root is found.  The old
     # rglob walked every season and media file once just to discover series,
     # then _scan_cloud_series walked the same files again.  On a CloudDrive2
     # mount that doubled remote metadata calls and made a full scan look stuck.
-    for current, directories, _ in os.walk(CLOUD_ROOT):
+    for current, directories, _ in os.walk(root):
         path = Path(current)
-        if path != CLOUD_ROOT and TMDB_RE.search(path.name):
+        if path != root and TMDB_RE.search(path.name):
             found.append(path)
             directories[:] = []
     return found
@@ -256,9 +256,14 @@ def scan(request: Request):
     # A synchronous FastAPI route runs in its worker thread pool.  CloudDrive2
     # directory traversal must not block the main asyncio event loop.
     _authorize(request)
-    rows = [_scan_cloud_series(path) for path in _series_dirs()]
+    # Candidate discovery uses Symedia's local STRM index, which mirrors what
+    # Emby currently sees and can be scanned in seconds.  Traversing every
+    # video on the CloudDrive2 mount exceeded the reverse proxy timeout.  The
+    # apply/preview path still re-reads and validates the real cloud files, so
+    # no media is ever changed based on the local index alone.
+    rows = [_scan_series(path) for path in _series_dirs(ROOT)]
     return {
-        "root": str(CLOUD_ROOT), "source": "cloud",
+        "root": str(ROOT), "source": "local-index-cloud-verified-on-apply",
         "series": [row for row in rows if row["strm_count"]],
     }
 
