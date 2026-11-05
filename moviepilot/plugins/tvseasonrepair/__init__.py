@@ -19,7 +19,7 @@ class TVSeasonRepair(_PluginBase):
     plugin_name = "旧媒体季度修复助手"
     plugin_desc = "从网盘源文件根治错误季度，并重建 Symedia/Emby 元数据。"
     plugin_icon = "tv.png"
-    plugin_version = "0.2.0"
+    plugin_version = "0.2.1"
     plugin_author = "kingsnakerrr"
     author_url = "https://github.com/kingsnakerrr/emby_remizhibei"
     plugin_config_prefix = "tvseasonrepair_"
@@ -185,6 +185,7 @@ class TVSeasonRepair(_PluginBase):
             missing_ids = sorted({
                 int(row.get("tmdb_id") or 0) for row in source_rows
                 if int(row.get("tmdb_id") or 0) and str(int(row.get("tmdb_id") or 0)) not in count_cache
+                and len(row.get("seasons") or []) == 1
             })
             # The first full-library scan can contain hundreds of titles.  A
             # small worker pool avoids a several-minute serial TMDB walk while
@@ -201,14 +202,18 @@ class TVSeasonRepair(_PluginBase):
                         logger.warning(f"季度修复：TMDB {tmdb_id} 查询失败：{err}")
             self.save_data("tmdb_season_counts", count_cache)
             results = []
+            skipped_existing_multiseason = 0
             for row in source_rows:
                 tmdb_id = int(row.get("tmdb_id") or 0)
                 if not tmdb_id:
                     continue
+                seasons = row.get("seasons") or []
+                if len(seasons) != 1:
+                    skipped_existing_multiseason += 1
+                    continue
                 official = count_cache.get(str(tmdb_id)) or []
                 if not official:
                     continue
-                seasons = row.get("seasons") or []
                 suspicious = []
                 for item in seasons:
                     number = int(item.get("season") or 0)
@@ -220,8 +225,7 @@ class TVSeasonRepair(_PluginBase):
                 if not suspicious:
                     continue
                 safe = (
-                    len(seasons) == 1
-                    and bool(seasons[0].get("contiguous_from_one"))
+                    bool(seasons[0].get("contiguous_from_one"))
                     and int(seasons[0].get("count") or 0) == sum(official)
                     and len(official) > 1
                 )
@@ -236,7 +240,11 @@ class TVSeasonRepair(_PluginBase):
                 results.append(row)
             results.sort(key=lambda item: (not item["safe"], item["name"]))
             self.save_data("scan_results", results)
-            self.save_data("last_message", f"扫描完成：发现 {len(results)} 部异常，{sum(1 for x in results if x['safe'])} 部可安全修复。")
+            self.save_data("last_message", (
+                f"扫描完成：发现 {len(results)} 部单季压平候选，"
+                f"{sum(1 for x in results if x['safe'])} 部可安全修复；"
+                f"另有 {skipped_existing_multiseason} 部已存在多季的媒体已跳过，不会自动修改。"
+            ))
             return {"success": True, "message": self.get_data("last_message"), "count": len(results)}
         except Exception as err:
             message = f"扫描失败：{type(err).__name__}: {err}"

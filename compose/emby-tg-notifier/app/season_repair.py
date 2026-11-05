@@ -198,16 +198,20 @@ def _scan_series(path: Path) -> dict:
 def _scan_cloud_series(path: Path) -> dict:
     episodes: dict[int, set[int]] = {}
     video_count = 0
-    for file in path.rglob("*"):
-        if not file.is_file() or file.suffix.lower() not in VIDEO_SUFFIXES:
-            continue
-        match = EP_RE.search(file.name)
-        if not match:
-            continue
-        season = int(match.group("season"))
-        episode = int(match.group("episode"))
-        episodes.setdefault(season, set()).add(episode)
-        video_count += 1
+    # os.walk already returns file names from each directory listing.  Calling
+    # Path.is_file() for every entry adds a separate remote stat request on a
+    # CloudDrive2 mount and made a full-library scan take tens of minutes.
+    for current, _, files in os.walk(path):
+        for name in files:
+            if Path(name).suffix.lower() not in VIDEO_SUFFIXES:
+                continue
+            match = EP_RE.search(name)
+            if not match:
+                continue
+            season = int(match.group("season"))
+            episode = int(match.group("episode"))
+            episodes.setdefault(season, set()).add(episode)
+            video_count += 1
     seasons = []
     for season, values in sorted(episodes.items()):
         ordered = sorted(values)
@@ -235,14 +239,22 @@ def _series_dirs() -> list[Path]:
     if not CLOUD_ROOT.exists():
         return []
     found = []
-    for path in CLOUD_ROOT.rglob("*"):
-        if path.is_dir() and TMDB_RE.search(path.name):
+    # Stop descending as soon as a TMDB-tagged series root is found.  The old
+    # rglob walked every season and media file once just to discover series,
+    # then _scan_cloud_series walked the same files again.  On a CloudDrive2
+    # mount that doubled remote metadata calls and made a full scan look stuck.
+    for current, directories, _ in os.walk(CLOUD_ROOT):
+        path = Path(current)
+        if path != CLOUD_ROOT and TMDB_RE.search(path.name):
             found.append(path)
+            directories[:] = []
     return found
 
 
 @router.post("/scan")
-async def scan(request: Request):
+def scan(request: Request):
+    # A synchronous FastAPI route runs in its worker thread pool.  CloudDrive2
+    # directory traversal must not block the main asyncio event loop.
     _authorize(request)
     rows = [_scan_cloud_series(path) for path in _series_dirs()]
     return {
@@ -285,7 +297,7 @@ def _build_exact_plan(series: Path, cloud_series: Path,
     moves = []
     matched_video_count = 0
     for path in cloud_series.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in CLOUD_MOVE_SUFFIXES:
+        if path.suffix.lower() not in CLOUD_MOVE_SUFFIXES or not path.is_file():
             continue
         match = EP_RE.search(path.name)
         if not match or int(match.group("season")) != source_season:

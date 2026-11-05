@@ -20,6 +20,25 @@ python3 scripts/patch-moviepilot-absolute-seasons.py --restart
 
 任一条件不满足时只写警告日志，不改文件名。原始下载文件不会被重命名；补丁只影响 MoviePilot 整理后的目标命名、STRM 和 NFO 季集号。
 
+## 实际执行时机
+
+补丁位于 MoviePilot 的整理链路，不是下载器插件：
+
+```text
+下载完成 -> MoviePilot 收集整包文件 -> 严格核对 TMDB 季数与总集数
+         -> 生成分季后的目标路径 -> 移动/上传 -> Symedia/Emby 入库
+```
+
+因此它会在写入网盘前完成分季。它不在 qBittorrent 下载目录里原地改名，不会一边改做种文件一边搬运。当前部署通过只读挂载把宿主机
+`/opt/docker-compose/moviepilot/overrides/transfer.py` 覆盖到容器内
+`/app/app/chain/transfer.py`；更新 MoviePilot 后重新运行安装脚本即可检查并补装。
+
+运行日志出现以下内容表示补丁已经参与了自动入库：
+
+```text
+已严格核验绝对集数全集包：N 集，将按 TMDB M 季自动分季命名。
+```
+
 《龙珠Z》TMDB 12971 的验证结果为 291 集：
 
 ```text
