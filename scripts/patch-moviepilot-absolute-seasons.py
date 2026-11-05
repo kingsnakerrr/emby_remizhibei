@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 MARKER = "absolute_episode_map: Dict[int, Tuple[int, int]] = {}"
+TOGGLE_GUARD = 'Path("/config/tvseasonpreflight.disabled").exists()'
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -22,6 +23,17 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 def patch_source(text: str) -> str:
     if MARKER in text:
+        if TOGGLE_GUARD not in text:
+            text = replace_once(
+                text,
+                "            nonlocal absolute_episode_map\n"
+                "            if not mediainfo or mediainfo.type != MediaType.TV:\n",
+                "            nonlocal absolute_episode_map\n"
+                "            if Path(\"/config/tvseasonpreflight.disabled\").exists():\n"
+                "                return\n"
+                "            if not mediainfo or mediainfo.type != MediaType.TV:\n",
+                "runtime toggle guard",
+            )
         return text
 
     text = replace_once(
@@ -72,6 +84,8 @@ def patch_source(text: str) -> str:
         ) -> None:
             """Enable remapping only after an exact TMDB-total match."""
             nonlocal absolute_episode_map
+            if Path("/config/tvseasonpreflight.disabled").exists():
+                return
             if not mediainfo or mediainfo.type != MediaType.TV:
                 return
             tmdb_id = getattr(mediainfo, "tmdb_id", None)

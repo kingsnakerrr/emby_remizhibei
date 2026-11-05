@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from fastapi import Body
+
 from app.core.config import settings
 from app.plugins import _PluginBase
 
@@ -12,7 +14,7 @@ class TVSeasonPreflight(_PluginBase):
     plugin_name = "入库前动漫自动分季"
     plugin_desc = "管理并查看下载完成后、移动上传前的绝对集数自动分季引擎。"
     plugin_icon = "tv.png"
-    plugin_version = "0.1.0"
+    plugin_version = "0.2.0"
     plugin_author = "kingsnakerrr"
     author_url = "https://github.com/kingsnakerrr/emby_remizhibei"
     plugin_config_prefix = "tvseasonpreflight_"
@@ -23,6 +25,7 @@ class TVSeasonPreflight(_PluginBase):
     _log_limit = 50
     _marker = "absolute_episode_map: Dict[int, Tuple[int, int]] = {}"
     _transfer_path = Path("/app/app/chain/transfer.py")
+    _disabled_path = Path(str(settings.CONFIG_PATH)) / "tvseasonpreflight.disabled"
 
     def init_plugin(self, config=None):
         config = config or {}
@@ -30,7 +33,7 @@ class TVSeasonPreflight(_PluginBase):
         self._log_limit = max(10, min(200, int(config.get("log_limit") or 50)))
 
     def get_state(self) -> bool:
-        return self._enabled
+        return True
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         return [{
@@ -64,26 +67,64 @@ class TVSeasonPreflight(_PluginBase):
 
     def _events(self) -> list[dict]:
         rows = []
-        pattern = re.compile(
-            r"(?P<date>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})[^-]*transfer\.py - (?P<message>.*(?:已严格核验绝对集数全集包|疑似绝对集数包).*)"
-        )
+        date_pattern = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
         for path in self._log_files():
             try:
                 text = path.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
             for line in text.splitlines():
-                match = pattern.search(line)
-                if not match:
+                if "已严格核验绝对集数全集包" not in line and "疑似绝对集数包" not in line:
                     continue
-                message = match.group("message").strip()
+                date_match = date_pattern.search(line)
+                message = line.rsplit(" - ", 1)[-1].strip()
                 rows.append({
-                    "date": match.group("date"),
+                    "date": date_match.group(0) if date_match else "时间未知",
                     "status": "success" if "已严格核验" in message else "skipped",
                     "message": message,
                 })
         rows.sort(key=lambda item: item["date"], reverse=True)
         return rows[:self._log_limit]
+
+    def _engine_enabled(self) -> bool:
+        return self._installed() and not self._disabled_path.exists()
+
+    def ui_status(self):
+        installed = self._installed()
+        events = self._events()
+        success = [item for item in events if item["status"] == "success"]
+        skipped = [item for item in events if item["status"] == "skipped"]
+        return {
+            "success": True,
+            "data": {
+                "installed": installed,
+                "enabled": installed and not self._disabled_path.exists(),
+                "success_count": len(success),
+                "skipped_count": len(skipped),
+                "success_logs": success,
+                "skipped_logs": skipped,
+                "flow": "下载完成 → 收集整包 → 核对 TMDB → 生成正确分季目标路径 → 移动/上传",
+                "path_mode": "自动使用 MoviePilot 当前任务的源路径和目标路径，无需单独设置目录。",
+            },
+        }
+
+    def toggle(self, payload: dict = Body(default={})):
+        enabled = bool(payload.get("enabled", True))
+        if not self._installed():
+            return {"success": False, "message": "未检测到入库前自动分季引擎。"}
+        if enabled:
+            self._disabled_path.unlink(missing_ok=True)
+        else:
+            self._disabled_path.write_text("disabled by TVSeasonPreflight\n", encoding="utf-8")
+        return {
+            "success": True,
+            "message": f"入库前自动分季已{'启用' if enabled else '停用'}。新整理任务立即生效。",
+            "data": self.ui_status()["data"],
+        }
+
+    @staticmethod
+    def get_render_mode() -> Tuple[str, str]:
+        return "vue", "dist/assets"
 
     def get_page(self) -> List[dict]:
         installed = self._installed()
@@ -142,7 +183,12 @@ class TVSeasonPreflight(_PluginBase):
         ]}]
 
     def get_api(self) -> List[Dict[str, Any]]:
-        return []
+        return [
+            {"path": "/ui_status", "endpoint": self.ui_status, "methods": ["POST"],
+             "auth": "bear", "summary": "获取入库前分季状态"},
+            {"path": "/toggle", "endpoint": self.toggle, "methods": ["POST"],
+             "auth": "bear", "summary": "启用或停用入库前分季"},
+        ]
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
