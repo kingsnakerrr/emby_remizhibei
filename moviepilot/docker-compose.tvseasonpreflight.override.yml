@@ -1,0 +1,4 @@
+services:
+  moviepilot:
+    volumes:
+      - /opt/docker-compose/moviepilot/config/local-plugins/plugins.v2/tvseasonpreflight:/app/app/plugins/tvseasonpreflight:ro

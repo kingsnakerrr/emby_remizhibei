@@ -19,7 +19,7 @@ class TVSeasonRepair(_PluginBase):
     plugin_name = "旧媒体季度修复助手"
     plugin_desc = "从网盘源文件根治错误季度，并重建 Symedia/Emby 元数据。"
     plugin_icon = "tv.png"
-    plugin_version = "0.2.1"
+    plugin_version = "0.3.0"
     plugin_author = "kingsnakerrr"
     author_url = "https://github.com/kingsnakerrr/emby_remizhibei"
     plugin_config_prefix = "tvseasonrepair_"
@@ -78,14 +78,66 @@ class TVSeasonRepair(_PluginBase):
     def _jobs(self) -> list[dict]:
         return self.get_data("repair_jobs") or []
 
+    @staticmethod
+    def _now() -> str:
+        return time.strftime("%Y-%m-%d %H:%M:%S")
+
+    def _set_headline(self, message: str) -> str:
+        value = f"[{self._now()}] {message}"
+        self.save_data("last_message", value)
+        return value
+
+    def _append_operation(self, kind: str, status: str, title: str,
+                          detail: str = "", **extra) -> dict:
+        with self._data_lock:
+            rows = self.get_data("operation_logs") or []
+            row = {
+                "id": uuid.uuid4().hex[:12],
+                "kind": kind,
+                "status": status,
+                "title": title,
+                "detail": detail,
+                "started_at": self._now(),
+                "finished_at": "",
+                "duration_seconds": None,
+                "started_ts": time.time(),
+                **extra,
+            }
+            rows.insert(0, row)
+            self.save_data("operation_logs", rows[:100])
+            return row
+
+    def _finish_operation(self, operation_id: str, status: str,
+                          detail: str = "", **extra) -> None:
+        with self._data_lock:
+            rows = self.get_data("operation_logs") or []
+            target = next((item for item in rows if item.get("id") == operation_id), None)
+            if not target:
+                return
+            finished_ts = time.time()
+            target.update(status=status, detail=detail,
+                          finished_at=self._now(),
+                          duration_seconds=round(finished_ts - float(target.get("started_ts") or finished_ts), 2),
+                          **extra)
+            self.save_data("operation_logs", rows[:100])
+
     def _update_job(self, job_id: str, **changes) -> dict | None:
         with self._data_lock:
             jobs = self._jobs()
             target = next((item for item in jobs if item.get("id") == job_id), None)
             if not target:
                 return None
+            now = self._now()
+            status = changes.get("status")
+            if status in {"previewing", "running"} and not target.get("started_at"):
+                target["started_at"] = now
+                target["started_ts"] = time.time()
+            if status in {"success", "failed"}:
+                target["finished_at"] = now
+                started_ts = float(target.get("started_ts") or time.time())
+                target["duration_seconds"] = round(time.time() - started_ts, 2)
             target.update(changes)
-            target["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            target["updated_at"] = now
             self.save_data("repair_jobs", jobs[:50])
             return target
 
@@ -96,7 +148,7 @@ class TVSeasonRepair(_PluginBase):
                            and item.get("status") in {"queued", "previewing", "running"}), None)
             if active:
                 return active, False
-            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            now = self._now()
             job = {
                 "id": uuid.uuid4().hex[:12],
                 "name": row["name"],
@@ -112,6 +164,7 @@ class TVSeasonRepair(_PluginBase):
 
     def _run_repair_job(self, job_id: str, key: str) -> None:
         with self._repair_lock:
+            row = None
             try:
                 rows = self.get_data("scan_results") or []
                 row = next((item for item in rows if item.get("series_rel") == key), None)
@@ -137,7 +190,7 @@ class TVSeasonRepair(_PluginBase):
                 with self._data_lock:
                     actions = self.get_data("actions") or []
                     actions.insert(0, {"name": row["name"], "action_id": result["action_id"],
-                                       "mode": result.get("mode")})
+                                       "mode": result.get("mode"), "finished_at": self._now()})
                     self.save_data("actions", actions[:30])
                     approvals = self.get_data("preview_approvals") or {}
                     approvals.pop(key, None)
@@ -149,11 +202,12 @@ class TVSeasonRepair(_PluginBase):
                            f"动作号 {result['action_id']}。{result.get('refresh_message', '')}")
                 self._update_job(job_id, status="success", message=message,
                                  action_id=result["action_id"])
-                self.save_data("last_message", f"{row['name']} {message}")
+                self._set_headline(f"修复成功：{row['name']}，移动 {result['video_move_count']} 个视频。")
             except Exception as err:
                 message = f"整理失败：{type(err).__name__}: {err}"
                 self._update_job(job_id, status="failed", message=message)
-                self.save_data("last_message", message)
+                name = row.get("name", key) if row else key
+                self._set_headline(f"修复失败：{name}。{type(err).__name__}")
                 logger.error(f"季度修复任务 {job_id} 失败：{err}")
 
     def _start_job(self, job: dict) -> None:
@@ -178,6 +232,8 @@ class TVSeasonRepair(_PluginBase):
         return [indexed[n] for n in range(1, len(indexed) + 1)]
 
     def scan(self, _: dict = Body(default={})):
+        operation = self._append_operation("scan", "running", "扫描现有媒体库",
+                                           "正在读取本地 STRM 索引并核对 TMDB 季度。")
         try:
             raw = self._post("scan")
             source_rows = raw.get("series") or []
@@ -240,15 +296,22 @@ class TVSeasonRepair(_PluginBase):
                 results.append(row)
             results.sort(key=lambda item: (not item["safe"], item["name"]))
             self.save_data("scan_results", results)
-            self.save_data("last_message", (
-                f"扫描完成：发现 {len(results)} 部单季压平候选，"
-                f"{sum(1 for x in results if x['safe'])} 部可安全修复；"
-                f"另有 {skipped_existing_multiseason} 部已存在多季的媒体已跳过，不会自动修改。"
-            ))
+            safe_count = sum(1 for x in results if x["safe"])
+            detail = (f"扫描完成：发现 {len(results)} 部单季压平候选，{safe_count} 部可安全修复；"
+                      f"跳过 {skipped_existing_multiseason} 部已存在多季的媒体。"
+                      f"候选：{'、'.join(item['name'] for item in results) or '无'}")
+            self._finish_operation(operation["id"], "success", detail,
+                                   candidate_count=len(results), safe_count=safe_count,
+                                   skipped_count=skipped_existing_multiseason)
+            self._set_headline(
+                f"扫描完成：候选 {len(results)}，可安全修复 {safe_count}，"
+                f"跳过已有多季 {skipped_existing_multiseason}。"
+            )
             return {"success": True, "message": self.get_data("last_message"), "count": len(results)}
         except Exception as err:
             message = f"扫描失败：{type(err).__name__}: {err}"
-            self.save_data("last_message", message)
+            self._finish_operation(operation["id"], "failed", message)
+            self._set_headline(f"扫描失败：{type(err).__name__}。")
             logger.error(message)
             return {"success": False, "message": message}
 
@@ -266,9 +329,11 @@ class TVSeasonRepair(_PluginBase):
                 message = f"已提交后台整理：{row['name']}。关闭再打开插件页可查看实时状态。"
             else:
                 message = f"{row['name']} 已在任务队列中，请勿重复点击。"
-            self.save_data("last_message", message)
+            self._set_headline(message)
             return {"success": True, "message": message, "job_id": job["id"]}
         approvals = self.get_data("preview_approvals") or {}
+        operation = self._append_operation("preview", "running", f"预览：{row['name']}",
+                                           "正在核验网盘真文件和目标季度路径。")
         try:
             result = self._post("apply-exact", {
                 "series_rel": key,
@@ -287,11 +352,13 @@ class TVSeasonRepair(_PluginBase):
                 approvals[key] = time.time()
                 self.save_data("preview_approvals", approvals)
                 message = f"预览通过：{row['name']} 将移动 {result['video_move_count']} 个网盘视频、{result['metadata_move_count']} 个网盘元数据文件，然后重建本地元素。"
-            self.save_data("last_message", message)
+            self._finish_operation(operation["id"], "success", message)
+            self._set_headline(message)
             return {"success": True, "message": message, "data": result}
         except Exception as err:
             message = f"操作失败：{type(err).__name__}: {err}"
-            self.save_data("last_message", message)
+            self._finish_operation(operation["id"], "failed", message)
+            self._set_headline(f"预览失败：{row['name']}，{type(err).__name__}。")
             return {"success": False, "message": message}
 
     def batch(self, payload: dict = Body(default={})):
@@ -305,9 +372,13 @@ class TVSeasonRepair(_PluginBase):
                     self._start_job(job)
                     queued.append(job)
             message = f"已提交 {len(queued)} 个后台整理任务；任务会逐个执行，请勿重复点击。"
-            self.save_data("last_message", message)
+            self._set_headline(message)
             return {"success": True, "message": message,
                     "job_ids": [item["id"] for item in queued]}
+        operation = self._append_operation(
+            "batch-preview", "running", "批量预览绿色项目",
+            f"正在逐项核验 {len(rows)} 部媒体的网盘文件和季度方案。",
+        )
         approvals = self.get_data("preview_approvals") or {}
         done, failed = [], []
         for row in rows:
@@ -337,18 +408,28 @@ class TVSeasonRepair(_PluginBase):
             self.save_data("preview_approvals", approvals)
         mode = "修复" if execute else "预览"
         message = f"批量{mode}完成：成功 {len(done)}，失败 {len(failed)}。"
-        self.save_data("last_message", message + ((" " + "；".join(failed[:3])) if failed else ""))
+        detail = message + ((" " + "；".join(failed)) if failed else "")
+        self._finish_operation(
+            operation["id"], "failed" if failed else "success", detail,
+            success_count=len(done), failed_count=len(failed),
+        )
+        self._set_headline(message + ((" " + "；".join(failed[:3])) if failed else ""))
         return {"success": not failed, "message": self.get_data("last_message")}
 
     def undo(self, payload: dict = Body(default={})):
         action_id = str(payload.get("action_id") or "")
+        operation = self._append_operation("undo", "running", f"回滚：{action_id}",
+                                           "正在恢复网盘文件和本地元素。")
         try:
             result = self._post(f"undo/{action_id}")
-            self.save_data("last_message", f"已回滚动作 {action_id}，恢复 {result['restored']} 个文件。")
+            message = f"已回滚动作 {action_id}，恢复 {result['restored']} 个文件。"
+            self._finish_operation(operation["id"], "success", message)
+            self._set_headline(message)
             return {"success": True, "message": self.get_data("last_message")}
         except Exception as err:
             message = f"回滚失败：{type(err).__name__}: {err}"
-            self.save_data("last_message", message)
+            self._finish_operation(operation["id"], "failed", message)
+            self._set_headline(f"回滚失败：{action_id}，{type(err).__name__}。")
             return {"success": False, "message": message}
 
     def get_api(self) -> List[Dict[str, Any]]:
@@ -370,51 +451,64 @@ class TVSeasonRepair(_PluginBase):
 
     def get_page(self) -> List[dict]:
         rows = self.get_data("scan_results") or []
-        message = self.get_data("last_message") or "先点击扫描；扫描不会修改任何文件。"
+        jobs = self._jobs()
+        operations = self.get_data("operation_logs") or []
+        actions = [item for item in (self.get_data("actions") or []) if item.get("mode") == "cloud-root-v2"]
+        message = self.get_data("last_message") or f"[{self._now()}] 尚未扫描；扫描不会修改任何文件。"
+
+        def detail_card(title: str, lines: list[str], color: str = "default") -> dict:
+            return {
+                "component": "VCard",
+                "props": {"variant": "outlined", "class": "mb-2", "color": color},
+                "content": [
+                    {"component": "VCardTitle", "props": {"class": "text-subtitle-1"}, "text": title},
+                    {"component": "VCardText", "props": {"class": "pt-1"}, "content": [
+                        {"component": "div", "props": {"class": "mb-1"}, "text": line}
+                        for line in lines if line
+                    ]},
+                ],
+            }
+
+        def panel(title: str, items: list[dict], color: str = "primary") -> dict:
+            body = items or [{"component": "VAlert", "props": {"type": "info", "variant": "tonal"},
+                              "text": "暂无记录"}]
+            return {
+                "component": "VExpansionPanel",
+                "content": [
+                    {"component": "VExpansionPanelTitle", "props": {"color": color},
+                     "text": f"{title}（{len(items)}）"},
+                    {"component": "VExpansionPanelText", "content": body},
+                ],
+            }
+
         content = [
-            {"component": "VAlert", "props": {"type": "info", "variant": "tonal", "class": "mb-4"}, "text": message},
-            {"component": "VAlert", "props": {"type": "warning", "variant": "tonal", "class": "mb-4"},
-             "text": "网盘修复通常需要几十秒到数分钟。MoviePilot 原生插件页不会实时刷新进度，请勿重复点击；完成后关闭再打开本页查看结果和回滚记录。"},
+            {"component": "VAlert", "props": {"type": "info", "variant": "tonal", "class": "mb-3"},
+             "text": message},
             {"component": "div", "props": {"class": "mb-4"}, "content": [
                 self._button("扫描现有媒体库", "scan", {}),
                 self._button("预览全部绿色项目", "batch", {"execute": False}, "info"),
                 self._button("确认批量修复（耗时）", "batch", {"execute": True}, "success"),
             ]},
+            {"component": "VRow", "props": {"class": "mb-3"}, "content": [
+                {"component": "VCol", "props": {"cols": 6, "md": 3}, "content": [
+                    detail_card("扫描候选", [f"{len(rows)} 部", f"安全：{sum(1 for x in rows if x.get('safe'))} 部"], "info")
+                ]},
+                {"component": "VCol", "props": {"cols": 6, "md": 3}, "content": [
+                    detail_card("处理中", [f"{sum(1 for x in jobs if x.get('status') in {'queued', 'previewing', 'running'})} 个任务"], "primary")
+                ]},
+                {"component": "VCol", "props": {"cols": 6, "md": 3}, "content": [
+                    detail_card("成功 / 失败", [
+                        f"成功 {sum(1 for x in jobs if x.get('status') == 'success')}",
+                        f"失败 {sum(1 for x in jobs if x.get('status') == 'failed')}",
+                    ], "success")
+                ]},
+                {"component": "VCol", "props": {"cols": 6, "md": 3}, "content": [
+                    detail_card("日志 / 回滚", [f"日志 {len(operations)} 条", f"可回滚 {len(actions)} 条"], "warning")
+                ]},
+            ]},
         ]
-        jobs = self._jobs()
-        if jobs:
-            status_labels = {
-                "queued": ("排队中", "warning"),
-                "previewing": ("正在预览", "info"),
-                "running": ("整理中", "primary"),
-                "success": ("成功整理", "success"),
-                "failed": ("整理失败", "error"),
-            }
-            job_content = [
-                {"component": "VAlert", "props": {"type": "info", "variant": "tonal", "class": "mb-3"},
-                 "text": "后台任务会持续运行。关闭再打开本页即可刷新状态，不要重复点击修复。"}
-            ]
-            for job in jobs[:20]:
-                label, color = status_labels.get(job.get("status"), (job.get("status", "未知"), "default"))
-                job_content.append({
-                    "component": "VCard", "props": {"variant": "outlined", "class": "mb-2"},
-                    "content": [
-                        {"component": "VCardTitle", "text": job.get("name", "未知项目")},
-                        {"component": "VCardSubtitle", "text": f"任务 {job.get('id')} · {job.get('updated_at', '')}"},
-                        {"component": "VCardText", "content": [
-                            {"component": "VChip", "props": {"color": color, "variant": "tonal", "class": "mb-2"},
-                             "text": label},
-                            {"component": "div", "text": job.get("message", "")},
-                        ]},
-                    ],
-                })
-            content.append({
-                "component": "VCard", "props": {"variant": "tonal", "class": "mb-4"},
-                "content": [
-                    {"component": "VCardTitle", "text": "修复任务"},
-                    {"component": "VCardText", "content": job_content},
-                ],
-            })
+
+        candidate_cards = []
         for row in rows:
             color = "success" if row.get("safe") else "warning"
             label = "可安全修复" if row.get("safe") else "需人工核对"
@@ -435,16 +529,63 @@ class TVSeasonRepair(_PluginBase):
                     self._button("只预览", "apply", {"series_rel": row["series_rel"], "execute": False}, "info"),
                     self._button("确认修复（勿重复点）", "apply", {"series_rel": row["series_rel"], "execute": True}, "success"),
                 ]})
-            content.append(card)
-        actions = [item for item in (self.get_data("actions") or []) if item.get("mode") == "cloud-root-v2"]
-        if actions:
-            content.append({"component": "VDivider", "props": {"class": "my-4"}})
-            content.append({"component": "h3", "text": "最近修复（可回滚）"})
-            for action in actions[:10]:
-                content.append({"component": "div", "props": {"class": "d-flex align-center mb-2"}, "content": [
-                    {"component": "span", "props": {"class": "mr-3"}, "text": f"{action['name']} · {action['action_id']}"},
-                    self._button("回滚", "undo", {"action_id": action["action_id"]}, "error"),
-                ]})
+            candidate_cards.append(card)
+
+        scan_logs = [detail_card(
+            item.get("title", "扫描"),
+            [f"开始：{item.get('started_at') or '-'}",
+             f"结束：{item.get('finished_at') or '进行中'}",
+             f"耗时：{item.get('duration_seconds') if item.get('duration_seconds') is not None else '-'} 秒",
+             f"结果：{item.get('detail') or '-'}"],
+            "success" if item.get("status") == "success" else ("error" if item.get("status") == "failed" else "info")
+        ) for item in operations if item.get("kind") == "scan"]
+
+        def job_cards(statuses: set[str]) -> list[dict]:
+            labels = {"queued": "排队中", "previewing": "正在预览", "running": "整理中",
+                      "success": "成功整理", "failed": "整理失败"}
+            return [detail_card(
+                f"{job.get('name', '未知项目')} · {labels.get(job.get('status'), job.get('status', '未知'))}",
+                [f"任务：{job.get('id')}", f"创建：{job.get('created_at') or '-'}",
+                 f"开始：{job.get('started_at') or '-'}", f"结束：{job.get('finished_at') or '进行中'}",
+                 f"耗时：{job.get('duration_seconds') if job.get('duration_seconds') is not None else '-'} 秒",
+                 f"结果：{job.get('message') or '-'}"],
+                "success" if job.get("status") == "success" else ("error" if job.get("status") == "failed" else "info")
+            ) for job in jobs if job.get("status") in statuses]
+
+        rollback_cards = []
+        for action in actions[:30]:
+            card = detail_card(
+                action.get("name", "未知项目"),
+                [f"完成：{action.get('finished_at') or '旧记录无时间'}", f"动作号：{action.get('action_id')}"],
+                "warning",
+            )
+            card["content"].append({"component": "VCardActions", "content": [
+                self._button("回滚", "undo", {"action_id": action["action_id"]}, "error")
+            ]})
+            rollback_cards.append(card)
+
+        other_logs = [detail_card(
+            item.get("title", "操作"),
+            [f"类型：{item.get('kind')}", f"开始：{item.get('started_at') or '-'}",
+             f"结束：{item.get('finished_at') or '进行中'}",
+             f"耗时：{item.get('duration_seconds') if item.get('duration_seconds') is not None else '-'} 秒",
+             f"结果：{item.get('detail') or '-'}"],
+            "success" if item.get("status") == "success" else ("error" if item.get("status") == "failed" else "info")
+        ) for item in operations if item.get("kind") != "scan"]
+
+        content.append({
+            "component": "VExpansionPanels",
+            "props": {"variant": "accordion", "class": "mb-4"},
+            "content": [
+                panel("扫描结果", candidate_cards, "info"),
+                panel("扫描日志", scan_logs, "info"),
+                panel("处理中", job_cards({"queued", "previewing", "running"}), "primary"),
+                panel("成功记录", job_cards({"success"}), "success"),
+                panel("失败记录", job_cards({"failed"}), "error"),
+                panel("预览与回滚日志", other_logs, "warning"),
+                panel("最近修复（可回滚）", rollback_cards, "warning"),
+            ],
+        })
         return [{"component": "div", "content": content}]
 
     @staticmethod

@@ -10,6 +10,8 @@ python3 scripts/patch-moviepilot-absolute-seasons.py --restart
 
 补丁目标为 `/opt/docker-compose/moviepilot/overrides/transfer.py`，安装前会自动备份。
 
+MoviePilot 插件页同时安装“入库前动漫自动分季”管理插件，用于查看引擎状态、规则、成功日志和安全跳过日志。管理插件负责可视化和维护；真正的路径转换仍在整理引擎中执行，保证时机早于移动上传。
+
 程序只在以下条件全部满足时自动转换：
 
 1. MoviePilot 已识别为电视剧并取得可靠 TMDB ID；
