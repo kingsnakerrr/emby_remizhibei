@@ -10,7 +10,10 @@ const recordTab = ref('scan')
 const scanSearch = ref('')
 const overrideOpen = ref(false)
 const rulesOpen = ref(false)
-const overrideForm = ref({ tmdb_id: 0, title: '', counts: '', source: '人工核对', note: '' })
+const overrideForm = ref({
+  tmdb_id: 0, title: '', counts: '', target_tmdb_id: '', target_season: '',
+  target_title: '', source: '人工核对', note: '',
+})
 const state = ref({
   headline: '正在读取状态…', summary: {}, scan_results: [], active_jobs: [],
   success_jobs: [], failed_jobs: [], scan_logs: [], other_logs: [], actions: [], season_overrides: [],
@@ -87,6 +90,9 @@ function openOverride(item) {
     tmdb_id: Number(item.tmdb_id),
     title: item.name || saved?.title || '',
     counts: saved?.counts?.join(',') || '',
+    target_tmdb_id: saved?.target_tmdb_id || '',
+    target_season: saved?.target_season || '',
+    target_title: saved?.target_title || '',
     source: saved?.source || '人工核对',
     note: saved?.note || '',
   }
@@ -100,7 +106,12 @@ async function saveOverride(remove = false) {
 }
 
 async function removeOverride(item) {
-  overrideForm.value = { ...item, counts: (item.counts || []).join(',') }
+  overrideForm.value = {
+    ...item,
+    counts: (item.counts || []).join(','),
+    target_tmdb_id: item.target_tmdb_id || '',
+    target_season: item.target_season || '',
+  }
   await saveOverride(true)
 }
 
@@ -156,7 +167,7 @@ onUnmounted(() => window.clearInterval(timer))
       <VBtn class="action-primary" prepend-icon="mdi-magnify" @click="run('scan')">扫描媒体库</VBtn>
       <VBtn class="action-info" prepend-icon="mdi-eye-outline" @click="run('batch', { execute: false })">预览安全项目</VBtn>
       <VBtn class="action-warning" prepend-icon="mdi-tools" @click="run('batch', { execute: true })">批量修复</VBtn>
-      <VBtn class="action-info" prepend-icon="mdi-tune" @click="rulesOpen = true">集数规则（{{ state.season_overrides?.length || 0 }}）</VBtn>
+      <VBtn class="action-info" prepend-icon="mdi-tune" @click="rulesOpen = true">集数与映射规则（{{ state.season_overrides?.length || 0 }}）</VBtn>
       <VBtn class="action-log" prepend-icon="mdi-text-box-outline" @click="openDialog('records', 'scan')">查看任务记录</VBtn>
     </div>
 
@@ -171,7 +182,7 @@ onUnmounted(() => window.clearInterval(timer))
         <VDivider />
 
         <VCardText v-if="dialog === 'scan'" class="dialog-body">
-          <VAlert type="info" variant="tonal" class="mb-3">默认使用 TMDB；若上游集数明显错误，可为该 TMDB ID 保存人工季度集数。覆盖规则会持久保留并优先于 TMDB。</VAlert>
+          <VAlert type="info" variant="tonal" class="mb-3">默认使用媒体当前绑定的 TMDB。若它是残缺的重复条目，可映射到正确系列的指定季度；只有找不到正确条目时才使用人工集数。</VAlert>
           <VTextField v-model="scanSearch" prepend-inner-icon="mdi-magnify" label="搜索媒体" variant="outlined" density="comfortable" hide-details class="mb-3" />
           <VDataTable :headers="scanHeaders" :items="state.scan_results" :search="scanSearch" :items-per-page="20" class="data-table">
             <template #item.status="{ item }"><span :class="item.safe ? 'status-safe' : 'status-manual'">{{ item.safe ? '可安全修复' : '人工核对' }}</span></template>
@@ -182,7 +193,7 @@ onUnmounted(() => window.clearInterval(timer))
               </div>
               <div v-else class="manual-actions">
                 <span class="reason-text" :title="item.reason">{{ item.reason }}</span>
-                <VBtn size="small" class="table-override" @click="openOverride(item)">设置集数</VBtn>
+                <VBtn size="small" class="table-override" @click="openOverride(item)">设置规则</VBtn>
               </div>
             </template>
           </VDataTable>
@@ -219,12 +230,17 @@ onUnmounted(() => window.clearInterval(timer))
 
     <VDialog v-model="overrideOpen" max-width="620">
       <VCard class="dialog-card">
-        <VCardTitle class="dialog-title"><span>人工季度集数</span><VBtn icon="mdi-close" variant="text" @click="overrideOpen = false" /></VCardTitle>
+        <VCardTitle class="dialog-title"><span>集数与正确季度映射</span><VBtn icon="mdi-close" variant="text" @click="overrideOpen = false" /></VCardTitle>
         <VDivider />
         <VCardText class="dialog-body">
-          <VAlert type="warning" variant="tonal" class="mb-4">仅在已核对可靠来源后使用。单季 38 集填写“38”；多季依次填写“20,20,18”。保存后重新扫描生效。</VAlert>
+          <VAlert type="warning" variant="tonal" class="mb-4">优先填写“正确 TMDB ID + 正确季度”。例如残缺的 291141/S01 对应完整系列 19389/S03；插件会读取正确季度的集数。没有正确条目时，才在人工集数中填写“38”或“20,20,18”。</VAlert>
           <VTextField v-model="overrideForm.title" label="媒体" readonly class="mb-3" />
-          <VTextField v-model="overrideForm.counts" label="各季集数（逗号分隔）" placeholder="例如：38 或 20,20,18" class="mb-3" />
+          <div class="mapping-grid mb-3">
+            <VTextField v-model="overrideForm.target_tmdb_id" type="number" label="正确系列 TMDB ID" placeholder="例如：19389" />
+            <VTextField v-model="overrideForm.target_season" type="number" label="正确季度" placeholder="例如：3" />
+          </div>
+          <VTextField v-model="overrideForm.target_title" label="正确系列名称（可选）" placeholder="例如：我和僵尸有个约会" class="mb-3" />
+          <VTextField v-model="overrideForm.counts" label="人工集数（映射留空时使用）" placeholder="例如：38 或 20,20,18" class="mb-3" />
           <VTextField v-model="overrideForm.source" label="核对来源" placeholder="例如：百度百科 / 官方资料" class="mb-3" />
           <VTextarea v-model="overrideForm.note" label="备注（可选）" rows="2" />
         </VCardText>
@@ -238,12 +254,12 @@ onUnmounted(() => window.clearInterval(timer))
 
     <VDialog v-model="rulesOpen" max-width="760" scrollable>
       <VCard class="dialog-card">
-        <VCardTitle class="dialog-title"><span>人工集数规则</span><VBtn icon="mdi-close" variant="text" @click="rulesOpen = false" /></VCardTitle>
+        <VCardTitle class="dialog-title"><span>集数与映射规则</span><VBtn icon="mdi-close" variant="text" @click="rulesOpen = false" /></VCardTitle>
         <VDivider />
         <VCardText class="dialog-body">
           <VAlert v-if="!state.season_overrides?.length" type="info" variant="tonal">尚未设置人工规则。</VAlert>
           <VList v-else bg-color="transparent">
-            <VListItem v-for="item in state.season_overrides" :key="item.tmdb_id" :title="`${item.title || '未命名'} · TMDB ${item.tmdb_id}`" :subtitle="`季度：${item.counts.join(', ')}｜来源：${item.source || '人工核对'}｜更新：${item.updated_at}`">
+            <VListItem v-for="item in state.season_overrides" :key="item.tmdb_id" :title="`${item.title || '未命名'} · TMDB ${item.tmdb_id}`" :subtitle="item.target_tmdb_id ? `映射：TMDB ${item.target_tmdb_id} S${String(item.target_season).padStart(2, '0')}（${item.counts?.[0] || '?'} 集）｜来源：${item.source || '人工核对'}｜更新：${item.updated_at}` : `人工季度：${item.counts.join(', ')}｜来源：${item.source || '人工核对'}｜更新：${item.updated_at}`">
               <template #append><VBtn color="error" variant="tonal" size="small" @click="removeOverride(item)">删除</VBtn></template>
             </VListItem>
           </VList>
@@ -288,10 +304,11 @@ onUnmounted(() => window.clearInterval(timer))
 .table-undo { background: #351b20; color: #ff5c67; }
 .table-override { background: #3b2d12; color: #ffc107; }
 .manual-actions { display: flex; align-items: center; gap: 8px; }
+.mapping-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
 .status-safe { color: #69d62c; }
 .status-manual { color: #ffb300; }
 .reason-text { display: inline-block; max-width: 160px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #ffb300; }
 .empty { padding: 40px 12px; text-align: center; color: rgb(var(--v-theme-on-surface-variant)); }
 @media (max-width: 900px) { .dashboard-grid { grid-template-columns: repeat(2, minmax(170px, 1fr)); } }
-@media (max-width: 560px) { .dashboard-grid { grid-template-columns: 1fr; } .dash-card { min-height: 112px; } }
+@media (max-width: 560px) { .dashboard-grid, .mapping-grid { grid-template-columns: 1fr; } .dash-card { min-height: 112px; } }
 </style>

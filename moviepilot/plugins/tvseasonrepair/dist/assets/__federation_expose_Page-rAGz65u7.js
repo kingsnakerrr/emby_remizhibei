@@ -51,6 +51,7 @@ const _hoisted_19 = {
   key: 4,
   class: "dialog-body"
 };
+const _hoisted_20 = { class: "mapping-grid mb-3" };
 
 const {computed,onMounted,onUnmounted,ref} = await importShared('vue');
 
@@ -70,7 +71,10 @@ const recordTab = ref('scan');
 const scanSearch = ref('');
 const overrideOpen = ref(false);
 const rulesOpen = ref(false);
-const overrideForm = ref({ tmdb_id: 0, title: '', counts: '', source: '人工核对', note: '' });
+const overrideForm = ref({
+  tmdb_id: 0, title: '', counts: '', target_tmdb_id: '', target_season: '',
+  target_title: '', source: '人工核对', note: '',
+});
 const state = ref({
   headline: '正在读取状态…', summary: {}, scan_results: [], active_jobs: [],
   success_jobs: [], failed_jobs: [], scan_logs: [], other_logs: [], actions: [], season_overrides: [],
@@ -147,6 +151,9 @@ function openOverride(item) {
     tmdb_id: Number(item.tmdb_id),
     title: item.name || saved?.title || '',
     counts: saved?.counts?.join(',') || '',
+    target_tmdb_id: saved?.target_tmdb_id || '',
+    target_season: saved?.target_season || '',
+    target_title: saved?.target_title || '',
     source: saved?.source || '人工核对',
     note: saved?.note || '',
   };
@@ -160,7 +167,12 @@ async function saveOverride(remove = false) {
 }
 
 async function removeOverride(item) {
-  overrideForm.value = { ...item, counts: (item.counts || []).join(',') };
+  overrideForm.value = {
+    ...item,
+    counts: (item.counts || []).join(','),
+    target_tmdb_id: item.target_tmdb_id || '',
+    target_season: item.target_season || '',
+  };
   await saveOverride(true);
 }
 
@@ -234,7 +246,7 @@ return (_ctx, _cache) => {
         default: _withCtx(() => [
           _createVNode(_component_VCardText, null, {
             default: _withCtx(() => [
-              _cache[24] || (_cache[24] = _createElementVNode("div", { class: "card-label" }, "扫描候选", -1)),
+              _cache[27] || (_cache[27] = _createElementVNode("div", { class: "card-label" }, "扫描候选", -1)),
               _createElementVNode("div", _hoisted_3, _toDisplayString(summary.value.candidate_count || 0), 1),
               _createElementVNode("div", _hoisted_4, "可安全修复 " + _toDisplayString(summary.value.safe_count || 0) + " 部", 1),
               _createVNode(_component_VIcon, {
@@ -254,9 +266,9 @@ return (_ctx, _cache) => {
         default: _withCtx(() => [
           _createVNode(_component_VCardText, null, {
             default: _withCtx(() => [
-              _cache[25] || (_cache[25] = _createElementVNode("div", { class: "card-label" }, "处理中", -1)),
+              _cache[28] || (_cache[28] = _createElementVNode("div", { class: "card-label" }, "处理中", -1)),
               _createElementVNode("div", _hoisted_5, _toDisplayString(summary.value.active_count || 0), 1),
-              _cache[26] || (_cache[26] = _createElementVNode("div", { class: "card-note" }, "查看队列与实时状态", -1)),
+              _cache[29] || (_cache[29] = _createElementVNode("div", { class: "card-note" }, "查看队列与实时状态", -1)),
               _createVNode(_component_VIcon, {
                 class: "card-arrow",
                 icon: "mdi-chevron-right"
@@ -274,7 +286,7 @@ return (_ctx, _cache) => {
         default: _withCtx(() => [
           _createVNode(_component_VCardText, null, {
             default: _withCtx(() => [
-              _cache[27] || (_cache[27] = _createElementVNode("div", { class: "card-label" }, "修复结果", -1)),
+              _cache[30] || (_cache[30] = _createElementVNode("div", { class: "card-label" }, "修复结果", -1)),
               _createElementVNode("div", _hoisted_6, _toDisplayString(summary.value.success_count || 0), 1),
               _createElementVNode("div", _hoisted_7, "失败 " + _toDisplayString(summary.value.failed_count || 0) + " 条", 1),
               _createVNode(_component_VIcon, {
@@ -294,7 +306,7 @@ return (_ctx, _cache) => {
         default: _withCtx(() => [
           _createVNode(_component_VCardText, null, {
             default: _withCtx(() => [
-              _cache[28] || (_cache[28] = _createElementVNode("div", { class: "card-label" }, "任务记录", -1)),
+              _cache[31] || (_cache[31] = _createElementVNode("div", { class: "card-label" }, "任务记录", -1)),
               _createElementVNode("div", _hoisted_8, _toDisplayString(summary.value.log_count || 0), 1),
               _createElementVNode("div", _hoisted_9, "可回滚 " + _toDisplayString(summary.value.rollback_count || 0) + " 条", 1),
               _createVNode(_component_VIcon, {
@@ -314,7 +326,7 @@ return (_ctx, _cache) => {
         "prepend-icon": "mdi-magnify",
         onClick: _cache[4] || (_cache[4] = $event => (run('scan')))
       }, {
-        default: _withCtx(() => [...(_cache[29] || (_cache[29] = [
+        default: _withCtx(() => [...(_cache[32] || (_cache[32] = [
           _createTextVNode("扫描媒体库", -1)
         ]))]),
         _: 1
@@ -324,7 +336,7 @@ return (_ctx, _cache) => {
         "prepend-icon": "mdi-eye-outline",
         onClick: _cache[5] || (_cache[5] = $event => (run('batch', { execute: false })))
       }, {
-        default: _withCtx(() => [...(_cache[30] || (_cache[30] = [
+        default: _withCtx(() => [...(_cache[33] || (_cache[33] = [
           _createTextVNode("预览安全项目", -1)
         ]))]),
         _: 1
@@ -334,7 +346,7 @@ return (_ctx, _cache) => {
         "prepend-icon": "mdi-tools",
         onClick: _cache[6] || (_cache[6] = $event => (run('batch', { execute: true })))
       }, {
-        default: _withCtx(() => [...(_cache[31] || (_cache[31] = [
+        default: _withCtx(() => [...(_cache[34] || (_cache[34] = [
           _createTextVNode("批量修复", -1)
         ]))]),
         _: 1
@@ -345,7 +357,7 @@ return (_ctx, _cache) => {
         onClick: _cache[7] || (_cache[7] = $event => (rulesOpen.value = true))
       }, {
         default: _withCtx(() => [
-          _createTextVNode("集数规则（" + _toDisplayString(state.value.season_overrides?.length || 0) + "）", 1)
+          _createTextVNode("集数与映射规则（" + _toDisplayString(state.value.season_overrides?.length || 0) + "）", 1)
         ]),
         _: 1
       }),
@@ -354,7 +366,7 @@ return (_ctx, _cache) => {
         "prepend-icon": "mdi-text-box-outline",
         onClick: _cache[8] || (_cache[8] = $event => (openDialog('records', 'scan')))
       }, {
-        default: _withCtx(() => [...(_cache[32] || (_cache[32] = [
+        default: _withCtx(() => [...(_cache[35] || (_cache[35] = [
           _createTextVNode("查看任务记录", -1)
         ]))]),
         _: 1
@@ -402,8 +414,8 @@ return (_ctx, _cache) => {
                       variant: "tonal",
                       class: "mb-3"
                     }, {
-                      default: _withCtx(() => [...(_cache[33] || (_cache[33] = [
-                        _createTextVNode("默认使用 TMDB；若上游集数明显错误，可为该 TMDB ID 保存人工季度集数。覆盖规则会持久保留并优先于 TMDB。", -1)
+                      default: _withCtx(() => [...(_cache[36] || (_cache[36] = [
+                        _createTextVNode("默认使用媒体当前绑定的 TMDB。若它是残缺的重复条目，可映射到正确系列的指定季度；只有找不到正确条目时才使用人工集数。", -1)
                       ]))]),
                       _: 1
                     }),
@@ -437,7 +449,7 @@ return (_ctx, _cache) => {
                                 class: "table-preview",
                                 onClick: $event => (run('apply', { series_rel: item.series_rel, execute: false }))
                               }, {
-                                default: _withCtx(() => [...(_cache[34] || (_cache[34] = [
+                                default: _withCtx(() => [...(_cache[37] || (_cache[37] = [
                                   _createTextVNode("预览", -1)
                                 ]))]),
                                 _: 1
@@ -447,7 +459,7 @@ return (_ctx, _cache) => {
                                 class: "table-fix",
                                 onClick: $event => (run('apply', { series_rel: item.series_rel, execute: true }))
                               }, {
-                                default: _withCtx(() => [...(_cache[35] || (_cache[35] = [
+                                default: _withCtx(() => [...(_cache[38] || (_cache[38] = [
                                   _createTextVNode("修复", -1)
                                 ]))]),
                                 _: 1
@@ -463,8 +475,8 @@ return (_ctx, _cache) => {
                                 class: "table-override",
                                 onClick: $event => (openOverride(item))
                               }, {
-                                default: _withCtx(() => [...(_cache[36] || (_cache[36] = [
-                                  _createTextVNode("设置集数", -1)
+                                default: _withCtx(() => [...(_cache[39] || (_cache[39] = [
+                                  _createTextVNode("设置规则", -1)
                                 ]))]),
                                 _: 1
                               }, 8, ["onClick"])
@@ -490,13 +502,13 @@ return (_ctx, _cache) => {
                         "item.started_at": _withCtx(({ item }) => [
                           _createTextVNode(_toDisplayString(item.started_at || item.created_at || '—'), 1)
                         ]),
-                        "item.finished_at": _withCtx(() => [...(_cache[37] || (_cache[37] = [
+                        "item.finished_at": _withCtx(() => [...(_cache[40] || (_cache[40] = [
                           _createTextVNode("—", -1)
                         ]))]),
-                        "item.duration": _withCtx(() => [...(_cache[38] || (_cache[38] = [
+                        "item.duration": _withCtx(() => [...(_cache[41] || (_cache[41] = [
                           _createTextVNode("运行中", -1)
                         ]))]),
-                        "no-data": _withCtx(() => [...(_cache[39] || (_cache[39] = [
+                        "no-data": _withCtx(() => [...(_cache[42] || (_cache[42] = [
                           _createElementVNode("div", { class: "empty" }, "当前没有处理中的任务", -1)
                         ]))]),
                         _: 1
@@ -513,31 +525,31 @@ return (_ctx, _cache) => {
                     }, {
                       default: _withCtx(() => [
                         _createVNode(_component_VTab, { value: "scan" }, {
-                          default: _withCtx(() => [...(_cache[40] || (_cache[40] = [
+                          default: _withCtx(() => [...(_cache[43] || (_cache[43] = [
                             _createTextVNode("扫描日志", -1)
                           ]))]),
                           _: 1
                         }),
                         _createVNode(_component_VTab, { value: "success" }, {
-                          default: _withCtx(() => [...(_cache[41] || (_cache[41] = [
+                          default: _withCtx(() => [...(_cache[44] || (_cache[44] = [
                             _createTextVNode("成功记录", -1)
                           ]))]),
                           _: 1
                         }),
                         _createVNode(_component_VTab, { value: "failed" }, {
-                          default: _withCtx(() => [...(_cache[42] || (_cache[42] = [
+                          default: _withCtx(() => [...(_cache[45] || (_cache[45] = [
                             _createTextVNode("失败记录", -1)
                           ]))]),
                           _: 1
                         }),
                         _createVNode(_component_VTab, { value: "operation" }, {
-                          default: _withCtx(() => [...(_cache[43] || (_cache[43] = [
+                          default: _withCtx(() => [...(_cache[46] || (_cache[46] = [
                             _createTextVNode("预览与回滚", -1)
                           ]))]),
                           _: 1
                         }),
                         _createVNode(_component_VTab, { value: "rollback" }, {
-                          default: _withCtx(() => [...(_cache[44] || (_cache[44] = [
+                          default: _withCtx(() => [...(_cache[47] || (_cache[47] = [
                             _createTextVNode("最近修复", -1)
                           ]))]),
                           _: 1
@@ -558,7 +570,7 @@ return (_ctx, _cache) => {
                               "item.duration": _withCtx(({ item }) => [
                                 _createTextVNode(_toDisplayString(formatDuration(item)), 1)
                               ]),
-                              "no-data": _withCtx(() => [...(_cache[45] || (_cache[45] = [
+                              "no-data": _withCtx(() => [...(_cache[48] || (_cache[48] = [
                                 _createElementVNode("div", { class: "empty" }, "暂无扫描日志", -1)
                               ]))]),
                               _: 1
@@ -581,7 +593,7 @@ return (_ctx, _cache) => {
                                 "item.duration": _withCtx(({ item }) => [
                                   _createTextVNode(_toDisplayString(formatDuration(item)), 1)
                                 ]),
-                                "no-data": _withCtx(() => [...(_cache[46] || (_cache[46] = [
+                                "no-data": _withCtx(() => [...(_cache[49] || (_cache[49] = [
                                   _createElementVNode("div", { class: "empty" }, "暂无成功记录", -1)
                                 ]))]),
                                 _: 1
@@ -604,7 +616,7 @@ return (_ctx, _cache) => {
                                   "item.duration": _withCtx(({ item }) => [
                                     _createTextVNode(_toDisplayString(formatDuration(item)), 1)
                                   ]),
-                                  "no-data": _withCtx(() => [...(_cache[47] || (_cache[47] = [
+                                  "no-data": _withCtx(() => [...(_cache[50] || (_cache[50] = [
                                     _createElementVNode("div", { class: "empty" }, "暂无失败记录", -1)
                                   ]))]),
                                   _: 1
@@ -621,7 +633,7 @@ return (_ctx, _cache) => {
                                     "item.duration": _withCtx(({ item }) => [
                                       _createTextVNode(_toDisplayString(formatDuration(item)), 1)
                                     ]),
-                                    "no-data": _withCtx(() => [...(_cache[48] || (_cache[48] = [
+                                    "no-data": _withCtx(() => [...(_cache[51] || (_cache[51] = [
                                       _createElementVNode("div", { class: "empty" }, "暂无预览或回滚日志", -1)
                                     ]))]),
                                     _: 1
@@ -643,13 +655,13 @@ return (_ctx, _cache) => {
                                         class: "table-undo",
                                         onClick: $event => (run('undo', { action_id: item.action_id }))
                                       }, {
-                                        default: _withCtx(() => [...(_cache[49] || (_cache[49] = [
+                                        default: _withCtx(() => [...(_cache[52] || (_cache[52] = [
                                           _createTextVNode("回滚", -1)
                                         ]))]),
                                         _: 1
                                       }, 8, ["onClick"])
                                     ]),
-                                    "no-data": _withCtx(() => [...(_cache[50] || (_cache[50] = [
+                                    "no-data": _withCtx(() => [...(_cache[53] || (_cache[53] = [
                                       _createElementVNode("div", { class: "empty" }, "暂无可回滚记录", -1)
                                     ]))]),
                                     _: 1
@@ -665,7 +677,7 @@ return (_ctx, _cache) => {
     }, 8, ["modelValue"]),
     _createVNode(_component_VDialog, {
       modelValue: overrideOpen.value,
-      "onUpdate:modelValue": _cache[21] || (_cache[21] = $event => ((overrideOpen).value = $event)),
+      "onUpdate:modelValue": _cache[24] || (_cache[24] = $event => ((overrideOpen).value = $event)),
       "max-width": "620"
     }, {
       default: _withCtx(() => [
@@ -673,7 +685,7 @@ return (_ctx, _cache) => {
           default: _withCtx(() => [
             _createVNode(_component_VCardTitle, { class: "dialog-title" }, {
               default: _withCtx(() => [
-                _cache[51] || (_cache[51] = _createElementVNode("span", null, "人工季度集数", -1)),
+                _cache[54] || (_cache[54] = _createElementVNode("span", null, "集数与正确季度映射", -1)),
                 _createVNode(_component_VBtn, {
                   icon: "mdi-close",
                   variant: "text",
@@ -690,8 +702,8 @@ return (_ctx, _cache) => {
                   variant: "tonal",
                   class: "mb-4"
                 }, {
-                  default: _withCtx(() => [...(_cache[52] || (_cache[52] = [
-                    _createTextVNode("仅在已核对可靠来源后使用。单季 38 集填写“38”；多季依次填写“20,20,18”。保存后重新扫描生效。", -1)
+                  default: _withCtx(() => [...(_cache[55] || (_cache[55] = [
+                    _createTextVNode("优先填写“正确 TMDB ID + 正确季度”。例如残缺的 291141/S01 对应完整系列 19389/S03；插件会读取正确季度的集数。没有正确条目时，才在人工集数中填写“38”或“20,20,18”。", -1)
                   ]))]),
                   _: 1
                 }),
@@ -702,23 +714,46 @@ return (_ctx, _cache) => {
                   readonly: "",
                   class: "mb-3"
                 }, null, 8, ["modelValue"]),
+                _createElementVNode("div", _hoisted_20, [
+                  _createVNode(_component_VTextField, {
+                    modelValue: overrideForm.value.target_tmdb_id,
+                    "onUpdate:modelValue": _cache[15] || (_cache[15] = $event => ((overrideForm.value.target_tmdb_id) = $event)),
+                    type: "number",
+                    label: "正确系列 TMDB ID",
+                    placeholder: "例如：19389"
+                  }, null, 8, ["modelValue"]),
+                  _createVNode(_component_VTextField, {
+                    modelValue: overrideForm.value.target_season,
+                    "onUpdate:modelValue": _cache[16] || (_cache[16] = $event => ((overrideForm.value.target_season) = $event)),
+                    type: "number",
+                    label: "正确季度",
+                    placeholder: "例如：3"
+                  }, null, 8, ["modelValue"])
+                ]),
+                _createVNode(_component_VTextField, {
+                  modelValue: overrideForm.value.target_title,
+                  "onUpdate:modelValue": _cache[17] || (_cache[17] = $event => ((overrideForm.value.target_title) = $event)),
+                  label: "正确系列名称（可选）",
+                  placeholder: "例如：我和僵尸有个约会",
+                  class: "mb-3"
+                }, null, 8, ["modelValue"]),
                 _createVNode(_component_VTextField, {
                   modelValue: overrideForm.value.counts,
-                  "onUpdate:modelValue": _cache[15] || (_cache[15] = $event => ((overrideForm.value.counts) = $event)),
-                  label: "各季集数（逗号分隔）",
+                  "onUpdate:modelValue": _cache[18] || (_cache[18] = $event => ((overrideForm.value.counts) = $event)),
+                  label: "人工集数（映射留空时使用）",
                   placeholder: "例如：38 或 20,20,18",
                   class: "mb-3"
                 }, null, 8, ["modelValue"]),
                 _createVNode(_component_VTextField, {
                   modelValue: overrideForm.value.source,
-                  "onUpdate:modelValue": _cache[16] || (_cache[16] = $event => ((overrideForm.value.source) = $event)),
+                  "onUpdate:modelValue": _cache[19] || (_cache[19] = $event => ((overrideForm.value.source) = $event)),
                   label: "核对来源",
                   placeholder: "例如：百度百科 / 官方资料",
                   class: "mb-3"
                 }, null, 8, ["modelValue"]),
                 _createVNode(_component_VTextarea, {
                   modelValue: overrideForm.value.note,
-                  "onUpdate:modelValue": _cache[17] || (_cache[17] = $event => ((overrideForm.value.note) = $event)),
+                  "onUpdate:modelValue": _cache[20] || (_cache[20] = $event => ((overrideForm.value.note) = $event)),
                   label: "备注（可选）",
                   rows: "2"
                 }, null, 8, ["modelValue"])
@@ -730,9 +765,9 @@ return (_ctx, _cache) => {
                 _createVNode(_component_VBtn, {
                   color: "primary",
                   variant: "flat",
-                  onClick: _cache[18] || (_cache[18] = $event => (saveOverride(false)))
+                  onClick: _cache[21] || (_cache[21] = $event => (saveOverride(false)))
                 }, {
-                  default: _withCtx(() => [...(_cache[53] || (_cache[53] = [
+                  default: _withCtx(() => [...(_cache[56] || (_cache[56] = [
                     _createTextVNode("保存规则", -1)
                   ]))]),
                   _: 1
@@ -742,9 +777,9 @@ return (_ctx, _cache) => {
                       key: 0,
                       color: "error",
                       variant: "tonal",
-                      onClick: _cache[19] || (_cache[19] = $event => (saveOverride(true)))
+                      onClick: _cache[22] || (_cache[22] = $event => (saveOverride(true)))
                     }, {
-                      default: _withCtx(() => [...(_cache[54] || (_cache[54] = [
+                      default: _withCtx(() => [...(_cache[57] || (_cache[57] = [
                         _createTextVNode("删除规则", -1)
                       ]))]),
                       _: 1
@@ -753,9 +788,9 @@ return (_ctx, _cache) => {
                 _createVNode(_component_VSpacer),
                 _createVNode(_component_VBtn, {
                   variant: "text",
-                  onClick: _cache[20] || (_cache[20] = $event => (overrideOpen.value = false))
+                  onClick: _cache[23] || (_cache[23] = $event => (overrideOpen.value = false))
                 }, {
-                  default: _withCtx(() => [...(_cache[55] || (_cache[55] = [
+                  default: _withCtx(() => [...(_cache[58] || (_cache[58] = [
                     _createTextVNode("取消", -1)
                   ]))]),
                   _: 1
@@ -771,7 +806,7 @@ return (_ctx, _cache) => {
     }, 8, ["modelValue"]),
     _createVNode(_component_VDialog, {
       modelValue: rulesOpen.value,
-      "onUpdate:modelValue": _cache[23] || (_cache[23] = $event => ((rulesOpen).value = $event)),
+      "onUpdate:modelValue": _cache[26] || (_cache[26] = $event => ((rulesOpen).value = $event)),
       "max-width": "760",
       scrollable: ""
     }, {
@@ -780,11 +815,11 @@ return (_ctx, _cache) => {
           default: _withCtx(() => [
             _createVNode(_component_VCardTitle, { class: "dialog-title" }, {
               default: _withCtx(() => [
-                _cache[56] || (_cache[56] = _createElementVNode("span", null, "人工集数规则", -1)),
+                _cache[59] || (_cache[59] = _createElementVNode("span", null, "集数与映射规则", -1)),
                 _createVNode(_component_VBtn, {
                   icon: "mdi-close",
                   variant: "text",
-                  onClick: _cache[22] || (_cache[22] = $event => (rulesOpen.value = false))
+                  onClick: _cache[25] || (_cache[25] = $event => (rulesOpen.value = false))
                 })
               ]),
               _: 1
@@ -798,7 +833,7 @@ return (_ctx, _cache) => {
                       type: "info",
                       variant: "tonal"
                     }, {
-                      default: _withCtx(() => [...(_cache[57] || (_cache[57] = [
+                      default: _withCtx(() => [...(_cache[60] || (_cache[60] = [
                         _createTextVNode("尚未设置人工规则。", -1)
                       ]))]),
                       _: 1
@@ -812,7 +847,7 @@ return (_ctx, _cache) => {
                           return (_openBlock(), _createBlock(_component_VListItem, {
                             key: item.tmdb_id,
                             title: `${item.title || '未命名'} · TMDB ${item.tmdb_id}`,
-                            subtitle: `季度：${item.counts.join(', ')}｜来源：${item.source || '人工核对'}｜更新：${item.updated_at}`
+                            subtitle: item.target_tmdb_id ? `映射：TMDB ${item.target_tmdb_id} S${String(item.target_season).padStart(2, '0')}（${item.counts?.[0] || '?'} 集）｜来源：${item.source || '人工核对'}｜更新：${item.updated_at}` : `人工季度：${item.counts.join(', ')}｜来源：${item.source || '人工核对'}｜更新：${item.updated_at}`
                           }, {
                             append: _withCtx(() => [
                               _createVNode(_component_VBtn, {
@@ -821,7 +856,7 @@ return (_ctx, _cache) => {
                                 size: "small",
                                 onClick: $event => (removeOverride(item))
                               }, {
-                                default: _withCtx(() => [...(_cache[58] || (_cache[58] = [
+                                default: _withCtx(() => [...(_cache[61] || (_cache[61] = [
                                   _createTextVNode("删除", -1)
                                 ]))]),
                                 _: 1
@@ -847,6 +882,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-e4265613"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-b6a72c56"]]);
 
 export { Page as default };

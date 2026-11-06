@@ -23,7 +23,7 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-def patch_source(text: str) -> str:
+def _patch_source_base(text: str) -> str:
     if MEDIA_SERVER_IMPORT not in text:
         text = replace_once(
             text,
@@ -251,6 +251,26 @@ def patch_source(text: str) -> str:
         "            return False, absolute_episode_conflict\n",
         "activation",
     )
+    return text
+
+
+def patch_source(text: str) -> str:
+    text = _patch_source_base(text)
+    marker = "# Reject verified incomplete duplicate identities before generating paths."
+    if marker not in text:
+        anchor = "            absolute_episodes: List[int] = []\n"
+        guard = '''            # Reject verified incomplete duplicate identities before generating paths.
+            if int(tmdb_id) == 291141:
+                absolute_episode_conflict = (
+                    f"{mediainfo.title_year} 命中残缺重复 TMDB 条目 291141；"
+                    "已阻止本次绝对集数全集整理。请重新识别为 TMDB 19389 第3季，"
+                    "对应38集；不会按错误条目继续入库。"
+                )
+                logger.warning(absolute_episode_conflict)
+                return
+
+'''
+        text = replace_once(text, anchor, guard + anchor, "duplicate identity guard")
     return text
 
 

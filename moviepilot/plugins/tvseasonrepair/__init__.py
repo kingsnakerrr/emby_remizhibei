@@ -19,7 +19,7 @@ class TVSeasonRepair(_PluginBase):
     plugin_name = "旧媒体季度修复助手"
     plugin_desc = "从网盘源文件根治错误季度，并重建 Symedia/Emby 元数据。"
     plugin_icon = "tv.png"
-    plugin_version = "0.4.2"
+    plugin_version = "0.4.3"
     plugin_author = "kingsnakerrr"
     author_url = "https://github.com/kingsnakerrr/emby_remizhibei"
     plugin_config_prefix = "tvseasonrepair_"
@@ -79,7 +79,7 @@ class TVSeasonRepair(_PluginBase):
         return self.get_data("repair_jobs") or []
 
     def _season_overrides(self) -> dict[str, dict]:
-        """Return persistent per-TMDB season counts for incomplete upstream entries."""
+        """Return persistent count overrides and canonical TMDB season mappings."""
         raw = self.get_data("season_count_overrides") or {}
         return raw if isinstance(raw, dict) else {}
 
@@ -97,34 +97,64 @@ class TVSeasonRepair(_PluginBase):
         return counts
 
     def save_season_override(self, payload: dict = Body(default={})):
-        tmdb_id = int(payload.get("tmdb_id") or 0)
+        try:
+            tmdb_id = int(payload.get("tmdb_id") or 0)
+            target_tmdb_id = int(payload.get("target_tmdb_id") or 0)
+            target_season = int(payload.get("target_season") or 0)
+        except (ValueError, TypeError):
+            return {"success": False, "message": "TMDB ID 和季度必须是整数"}
         if tmdb_id <= 0:
             return {"success": False, "message": "TMDB ID 无效"}
         overrides = self._season_overrides()
         key = str(tmdb_id)
+        # Never execute a scan plan made using a different rule.
+        self.save_data("scan_results", [row for row in (self.get_data("scan_results") or [])
+                                        if str(row.get("tmdb_id")) != key])
+        self.save_data("preview_approvals", {})
         if bool(payload.get("delete")):
             overrides.pop(key, None)
             self.save_data("season_count_overrides", overrides)
-            self._set_headline(f"已删除 TMDB {tmdb_id} 的人工集数规则；下次扫描恢复使用 TMDB。")
+            self._set_headline(f"已删除 TMDB {tmdb_id} 的集数/映射规则；下次扫描恢复使用原条目。")
             return {"success": True, "message": self.get_data("last_message")}
-        try:
-            counts = self._parse_counts(payload.get("counts"))
-        except (TypeError, ValueError) as err:
-            return {"success": False, "message": str(err)}
+        counts = []
+        if target_tmdb_id or target_season:
+            if target_tmdb_id <= 0 or target_season <= 0:
+                return {"success": False, "message": "正确 TMDB ID 与季度必须同时填写"}
+            try:
+                target_counts = self._official_counts(target_tmdb_id)
+            except Exception as err:
+                return {"success": False, "message": f"读取正确 TMDB 条目失败：{err}"}
+            if target_season > len(target_counts):
+                return {"success": False, "message": f"TMDB {target_tmdb_id} 不存在第 {target_season} 季"}
+            counts = [target_counts[target_season - 1]]
+            count_cache = self.get_data("tmdb_season_counts") or {}
+            count_cache[str(target_tmdb_id)] = target_counts
+            self.save_data("tmdb_season_counts", count_cache)
+        else:
+            try:
+                counts = self._parse_counts(payload.get("counts"))
+            except (TypeError, ValueError) as err:
+                return {"success": False, "message": str(err)}
         overrides[key] = {
             "tmdb_id": tmdb_id,
             "counts": counts,
+            "target_tmdb_id": target_tmdb_id,
+            "target_season": target_season,
+            "target_title": str(payload.get("target_title") or "").strip(),
             "title": str(payload.get("title") or "").strip(),
             "source": str(payload.get("source") or "人工核对").strip(),
             "note": str(payload.get("note") or "").strip(),
             "updated_at": self._now(),
         }
         self.save_data("season_count_overrides", overrides)
-        self._set_headline(
-            f"已保存 TMDB {tmdb_id} 人工集数规则：" +
-            "、".join(f"S{i:02d}={count}" for i, count in enumerate(counts, 1)) +
-            "；请重新扫描。"
-        )
+        if target_tmdb_id:
+            detail = (f"映射到 TMDB {target_tmdb_id} S{target_season:02d}="
+                      f"{counts[0]} 集")
+        else:
+            detail = "人工集数 " + "、".join(
+                f"S{i:02d}={count}" for i, count in enumerate(counts, 1)
+            )
+        self._set_headline(f"已保存 TMDB {tmdb_id} 规则：{detail}；请重新扫描。")
         return {"success": True, "message": self.get_data("last_message")}
 
     @staticmethod
@@ -289,10 +319,21 @@ class TVSeasonRepair(_PluginBase):
             raw = self._post("scan")
             source_rows = raw.get("series") or []
             count_cache = self.get_data("tmdb_season_counts") or {}
-            missing_ids = sorted({
+            cache_times = self.get_data("tmdb_season_count_times") or {}
+            overrides = self._season_overrides()
+            missing_ids = {
                 int(row.get("tmdb_id") or 0) for row in source_rows
-                if int(row.get("tmdb_id") or 0) and str(int(row.get("tmdb_id") or 0)) not in count_cache
-            })
+                if int(row.get("tmdb_id") or 0) and (
+                    str(int(row.get("tmdb_id") or 0)) not in count_cache
+                    or time.time() - float(cache_times.get(str(int(row.get("tmdb_id") or 0))) or 0) > 21600
+                )
+            }
+            missing_ids.update(
+                int(rule.get("target_tmdb_id") or 0)
+                for rule in overrides.values()
+                if int(rule.get("target_tmdb_id") or 0)
+            )
+            missing_ids = sorted(missing_ids)
             # The first full-library scan can contain hundreds of titles.  A
             # small worker pool avoids a several-minute serial TMDB walk while
             # staying well below an aggressive request fan-out.
@@ -304,10 +345,14 @@ class TVSeasonRepair(_PluginBase):
                         counts = future.result()
                         if counts:
                             count_cache[str(tmdb_id)] = counts
+                            cache_times[str(tmdb_id)] = time.time()
+                        else:
+                            count_cache.pop(str(tmdb_id), None)
                     except Exception as err:
+                        count_cache.pop(str(tmdb_id), None)
                         logger.warning(f"季度修复：TMDB {tmdb_id} 查询失败：{err}")
             self.save_data("tmdb_season_counts", count_cache)
-            overrides = self._season_overrides()
+            self.save_data("tmdb_season_count_times", cache_times)
             results = []
             skipped_existing_multiseason = 0
             for row in source_rows:
@@ -316,7 +361,26 @@ class TVSeasonRepair(_PluginBase):
                     continue
                 seasons = row.get("seasons") or []
                 override = overrides.get(str(tmdb_id)) or {}
-                official = override.get("counts") or count_cache.get(str(tmdb_id)) or []
+                target_tmdb_id = int(override.get("target_tmdb_id") or 0)
+                target_season = int(override.get("target_season") or 0)
+                mapped_counts = (
+                    count_cache.get(str(target_tmdb_id)) or []
+                ) if target_tmdb_id else []
+                if target_tmdb_id and 0 < target_season <= len(mapped_counts):
+                    official = [mapped_counts[target_season - 1]]
+                    count_source = "TMDB映射"
+                    source_prefix = (f"映射 TMDB {target_tmdb_id} S{target_season:02d}"
+                                     f"→当前 S01：")
+                else:
+                    if target_tmdb_id:
+                        row.update(safe=False, official_counts=[], count_source="映射核对失败",
+                                   official_summary=f"无法核对 TMDB {target_tmdb_id} S{target_season:02d}",
+                                   current_summary=str(seasons), reason="正确条目查询失败，禁止使用旧快照执行修复")
+                        results.append(row)
+                        continue
+                    official = override.get("counts") or count_cache.get(str(tmdb_id)) or []
+                    count_source = "人工覆盖" if override else "TMDB"
+                    source_prefix = "人工覆盖：" if override else ""
                 if not official:
                     continue
                 season_map = {int(item.get("season") or 0): item for item in seasons}
@@ -348,8 +412,8 @@ class TVSeasonRepair(_PluginBase):
                         if int(season_map[number].get("max") or 0) > official[number - 1]
                     ]
                     row["official_counts"] = official
-                    row["count_source"] = "人工覆盖" if override else "TMDB"
-                    row["official_summary"] = ("人工覆盖：" if override else "") + "、".join(
+                    row["count_source"] = count_source
+                    row["official_summary"] = source_prefix + "、".join(
                         f"S{i:02d}:{count}" for i, count in enumerate(official, 1)
                     )
                     row["safe"] = True
@@ -379,11 +443,12 @@ class TVSeasonRepair(_PluginBase):
                     bool(seasons[0].get("contiguous_from_one"))
                     and int(seasons[0].get("count") or 0) == sum(official)
                     and len(official) > 1
+                    and not (seasons[0].get("duplicates") or seasons[0].get("missing"))
                 )
                 row["official_counts"] = official
                 row["repair_mode"] = "split_flattened"
-                row["count_source"] = "人工覆盖" if override else "TMDB"
-                row["official_summary"] = ("人工覆盖：" if override else "") + "、".join(
+                row["count_source"] = count_source
+                row["official_summary"] = source_prefix + "、".join(
                     f"S{i:02d}:{count}" for i, count in enumerate(official, 1)
                 )
                 row["safe"] = safe

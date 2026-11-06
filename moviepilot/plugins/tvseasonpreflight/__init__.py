@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import heapq
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -14,7 +15,7 @@ class TVSeasonPreflight(_PluginBase):
     plugin_name = "入库前动漫自动分季"
     plugin_desc = "管理并查看下载完成后、移动上传前的绝对集数自动分季引擎。"
     plugin_icon = "tv.png"
-    plugin_version = "0.2.1"
+    plugin_version = "0.2.2"
     plugin_author = "kingsnakerrr"
     author_url = "https://github.com/kingsnakerrr/emby_remizhibei"
     plugin_config_prefix = "tvseasonpreflight_"
@@ -67,13 +68,15 @@ class TVSeasonPreflight(_PluginBase):
 
     def _events(self) -> list[dict]:
         rows = []
+        serial = 0
         date_pattern = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
         for path in self._log_files():
             try:
-                text = path.read_text(encoding="utf-8", errors="ignore")
+                stream = path.open(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
-            for line in text.splitlines():
+            with stream:
+              for line in stream:
                 if not any(marker in line for marker in (
                     "已严格核验绝对集数全集包",
                     "疑似绝对集数包",
@@ -82,13 +85,16 @@ class TVSeasonPreflight(_PluginBase):
                     continue
                 date_match = date_pattern.search(line)
                 message = line.rsplit(" - ", 1)[-1].strip()
-                rows.append({
+                row = {
                     "date": date_match.group(0) if date_match else "时间未知",
                     "status": "success" if "已严格核验" in message else "skipped",
                     "message": message,
-                })
-        rows.sort(key=lambda item: item["date"], reverse=True)
-        return rows[:self._log_limit]
+                }
+                serial += 1
+                heapq.heappush(rows, (row["date"], serial, row))
+                if len(rows) > self._log_limit:
+                    heapq.heappop(rows)
+        return [item[2] for item in sorted(rows, reverse=True)]
 
     def _engine_enabled(self) -> bool:
         return self._installed() and not self._disabled_path.exists()
