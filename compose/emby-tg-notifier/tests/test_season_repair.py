@@ -78,6 +78,71 @@ class SeasonRepairTest(unittest.TestCase):
                 repair.CLOUD_ROOT = old_cloud
                 repair.CLOUD_STRM_PREFIX = old_prefix
 
+    def test_overlay_cleanup_quarantines_only_surplus_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            cloud_root = base / "cloud"
+            quarantine_root = base / "quarantine"
+            cloud_series = cloud_root / "anime" / "Overlay (2020) {tmdb-2}"
+            (cloud_series / "Season 1").mkdir(parents=True)
+            (cloud_series / "Season 2").mkdir(parents=True)
+
+            old_cloud = repair.CLOUD_ROOT
+            old_quarantine = repair.QUARANTINE_ROOT
+            repair.CLOUD_ROOT = cloud_root
+            repair.QUARANTINE_ROOT = quarantine_root
+            try:
+                for season, count in ((1, 2), (2, 3)):
+                    for episode in range(1, count + 1):
+                        (cloud_series / f"Season {season}" /
+                         f"Overlay.S{season:02d}E{episode:02d}.mkv").write_bytes(b"correct")
+                for episode in (3, 4):
+                    stem = f"Overlay.S01E{episode:02d}.old"
+                    (cloud_series / "Season 1" / f"{stem}.mkv").write_bytes(b"stale")
+                    (cloud_series / "Season 1" / f"{stem}-thumb.jpg").write_bytes(b"image")
+
+                moves = repair._build_overlay_cleanup_plan(
+                    cloud_series, [2, 3], "test-action"
+                )
+                self.assertEqual(4, len(moves))
+                self.assertEqual(2, sum(src.suffix == ".mkv" for src, _ in moves))
+                self.assertTrue(all(str(dst).startswith(str(quarantine_root)) for _, dst in moves))
+                self.assertTrue(all("E03" in src.name or "E04" in src.name for src, _ in moves))
+            finally:
+                repair.CLOUD_ROOT = old_cloud
+                repair.QUARANTINE_ROOT = old_quarantine
+
+    def test_overlay_cleanup_refuses_ambiguous_valid_duplicates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            cloud_root = base / "cloud"
+            quarantine_root = base / "quarantine"
+            cloud_series = cloud_root / "anime" / "Ambiguous (2020) {tmdb-3}"
+            (cloud_series / "Season 1").mkdir(parents=True)
+            (cloud_series / "Season 2").mkdir(parents=True)
+
+            old_cloud = repair.CLOUD_ROOT
+            old_quarantine = repair.QUARANTINE_ROOT
+            repair.CLOUD_ROOT = cloud_root
+            repair.QUARANTINE_ROOT = quarantine_root
+            try:
+                for season, count in ((1, 2), (2, 2)):
+                    for episode in range(1, count + 1):
+                        (cloud_series / f"Season {season}" /
+                         f"Show.S{season:02d}E{episode:02d}.mkv").write_bytes(b"correct")
+                (cloud_series / "Season 2" / "Show.S02E02.old-copy.mkv").write_bytes(b"ambiguous")
+                (cloud_series / "Season 2" / "Show.S02E03.old-copy.mkv").write_bytes(b"surplus")
+
+                with self.assertRaises(repair.HTTPException) as raised:
+                    repair._build_overlay_cleanup_plan(
+                        cloud_series, [2, 2], "test-ambiguous"
+                    )
+                self.assertEqual(409, raised.exception.status_code)
+                self.assertIn("multiple files claim valid episodes", raised.exception.detail)
+            finally:
+                repair.CLOUD_ROOT = old_cloud
+                repair.QUARANTINE_ROOT = old_quarantine
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,9 @@ router = APIRouter(prefix="/season-repair", tags=["season-repair"])
 
 ROOT = Path(os.getenv("SEASON_REPAIR_ROOT", "/home/symedia_gd/tvshows"))
 CLOUD_ROOT = Path(os.getenv("SEASON_REPAIR_CLOUD_ROOT", "/cloud-tvshows"))
+QUARANTINE_ROOT = Path(os.getenv(
+    "SEASON_REPAIR_QUARANTINE_ROOT", "/cloud-quarantine"
+))
 CLOUD_STRM_PREFIX = Path(os.getenv(
     "SEASON_REPAIR_CLOUD_STRM_PREFIX",
     "/CloudNAS/CloudDrive/GoogleDrive/zero/media/symedia_gd/tvshows",
@@ -140,6 +143,10 @@ def _inside_root(path: Path) -> Path:
 
 def _inside_cloud(path: Path) -> Path:
     return _inside(path, CLOUD_ROOT)
+
+
+def _inside_quarantine(path: Path) -> Path:
+    return _inside(path, QUARANTINE_ROOT)
 
 
 def _series_path(relative: str) -> Path:
@@ -332,6 +339,77 @@ def _build_exact_plan(series: Path, cloud_series: Path,
     return moves
 
 
+def _build_overlay_cleanup_plan(
+        cloud_series: Path,
+        official_counts: list[int],
+        action_id: str,
+) -> list[tuple[Path, Path]]:
+    """Quarantine only surplus absolute-number files after exact coverage checks."""
+    official_counts = [int(x) for x in official_counts if int(x) > 0]
+    if len(official_counts) < 2:
+        raise HTTPException(status_code=409, detail="official season list is incomplete")
+
+    videos: dict[tuple[int, int], list[Path]] = {}
+    for path in cloud_series.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in VIDEO_SUFFIXES:
+            continue
+        match = EP_RE.search(path.name)
+        if not match:
+            continue
+        key = (int(match.group("season")), int(match.group("episode")))
+        videos.setdefault(key, []).append(path)
+
+    missing = []
+    duplicate_expected = []
+    for season, count in enumerate(official_counts, start=1):
+        for episode in range(1, count + 1):
+            matches = videos.get((season, episode)) or []
+            if not matches:
+                missing.append(f"S{season:02d}E{episode:02d}")
+            elif len(matches) != 1:
+                duplicate_expected.append(f"S{season:02d}E{episode:02d}")
+    if missing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"correct season set is incomplete ({len(missing)} missing); refusing cleanup",
+        )
+    if duplicate_expected:
+        raise HTTPException(
+            status_code=409,
+            detail=f"multiple files claim valid episodes ({len(duplicate_expected)}); manual review required",
+        )
+
+    extra_videos = []
+    for (season, episode), paths in videos.items():
+        if 1 <= season <= len(official_counts) and episode > official_counts[season - 1]:
+            extra_videos.extend(paths)
+    if not extra_videos:
+        raise HTTPException(status_code=409, detail="no surplus absolute-number videos found")
+
+    companion_keys = {(path.parent, path.stem) for path in extra_videos}
+    sources = set(extra_videos)
+    for path in cloud_series.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in (ALLOWED_SUFFIXES - {".strm"}):
+            continue
+        if any(path.parent == parent and (
+                path.stem == stem or path.stem.startswith(f"{stem}-")
+        ) for parent, stem in companion_keys):
+            sources.add(path)
+
+    series_rel = cloud_series.relative_to(CLOUD_ROOT)
+    moves = []
+    for source in sorted(sources):
+        relative = source.relative_to(cloud_series)
+        target = QUARANTINE_ROOT / series_rel / action_id / relative
+        moves.append((_inside_cloud(source), _inside_quarantine(target)))
+    destinations = [target for _, target in moves]
+    if len(destinations) != len(set(destinations)):
+        raise HTTPException(status_code=409, detail="quarantine destination collision")
+    if any(target.exists() for target in destinations):
+        raise HTTPException(status_code=409, detail="quarantine destination already exists")
+    return moves
+
+
 def _rebuild_local_series(series: Path, cloud_series: Path) -> None:
     """Recreate the Symedia-style local tree from canonical cloud files."""
     if series.exists():
@@ -411,8 +489,16 @@ async def apply_exact(request: Request):
     series = _series_path(body.get("series_rel", ""))
     cloud_series = _cloud_series_path(body.get("series_rel", ""))
     counts = body.get("official_counts") or []
-    moves = _build_exact_plan(series, cloud_series, counts)
-    if body.get("preview", True):
+    repair_mode = str(body.get("repair_mode") or "split_flattened")
+    preview = bool(body.get("preview", True))
+    action_id = "preview" if preview else f"{int(time.time())}-{secrets.token_hex(4)}"
+    if repair_mode == "cleanup_overlay":
+        moves = _build_overlay_cleanup_plan(cloud_series, counts, action_id)
+        manifest_mode = "cloud-overlay-cleanup-v1"
+    else:
+        moves = _build_exact_plan(series, cloud_series, counts)
+        manifest_mode = "cloud-root-v2"
+    if preview:
         return {
             "preview": True,
             "move_count": len(moves),
@@ -421,7 +507,6 @@ async def apply_exact(request: Request):
             "examples": [{"from": a.name, "to": b.name} for a, b in moves[:12]],
         }
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    action_id = f"{int(time.time())}-{secrets.token_hex(4)}"
     backup_dir = STATE_DIR / "backups"
     manifest_dir = STATE_DIR / "manifests"
     backup_dir.mkdir(exist_ok=True)
@@ -430,7 +515,7 @@ async def apply_exact(request: Request):
     with tarfile.open(backup, "w:gz") as archive:
         archive.add(series, arcname=series.name)
     manifest = {
-        "mode": "cloud-root-v2",
+        "mode": manifest_mode,
         "action_id": action_id,
         "series_rel": series.relative_to(ROOT.resolve()).as_posix(),
         "cloud_series_rel": cloud_series.relative_to(CLOUD_ROOT.resolve()).as_posix(),
@@ -468,7 +553,7 @@ async def apply_exact(request: Request):
             _symedia_start()
     refresh_message = _refresh_emby()
     return {
-        "ok": True, "mode": "cloud-root-v2", "action_id": action_id, "move_count": len(moves),
+        "ok": True, "mode": manifest_mode, "action_id": action_id, "move_count": len(moves),
         "video_move_count": sum(1 for src, _ in moves if src.suffix.lower() in VIDEO_SUFFIXES),
         "backup": str(backup), "refresh_message": refresh_message,
     }
@@ -483,11 +568,21 @@ async def undo(action_id: str, request: Request):
     if not manifest_path.exists():
         raise HTTPException(status_code=404, detail="repair action not found")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("mode") != "cloud-root-v2":
+    mode = manifest.get("mode")
+    if mode not in {"cloud-root-v2", "cloud-overlay-cleanup-v1"}:
         raise HTTPException(status_code=409, detail="legacy metadata-only action cannot be undone by cloud repair")
     series = _series_path(manifest["series_rel"])
     backup = Path(manifest["backup"])
-    moves = [(_inside_cloud(Path(item["from"])), _inside_cloud(Path(item["to"]))) for item in manifest["moves"]]
+    if mode == "cloud-overlay-cleanup-v1":
+        moves = [
+            (_inside_cloud(Path(item["from"])), _inside_quarantine(Path(item["to"])))
+            for item in manifest["moves"]
+        ]
+    else:
+        moves = [
+            (_inside_cloud(Path(item["from"])), _inside_cloud(Path(item["to"])))
+            for item in manifest["moves"]
+        ]
     for source_path, target_path in moves:
         if source_path.exists() or not target_path.exists():
             raise HTTPException(status_code=409, detail="library changed after repair; refusing automatic undo")

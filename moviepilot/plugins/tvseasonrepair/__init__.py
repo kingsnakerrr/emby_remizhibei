@@ -19,7 +19,7 @@ class TVSeasonRepair(_PluginBase):
     plugin_name = "旧媒体季度修复助手"
     plugin_desc = "从网盘源文件根治错误季度，并重建 Symedia/Emby 元数据。"
     plugin_icon = "tv.png"
-    plugin_version = "0.4.0"
+    plugin_version = "0.4.1"
     plugin_author = "kingsnakerrr"
     author_url = "https://github.com/kingsnakerrr/emby_remizhibei"
     plugin_config_prefix = "tvseasonrepair_"
@@ -174,6 +174,7 @@ class TVSeasonRepair(_PluginBase):
                 preview = self._post("apply-exact", {
                     "series_rel": key,
                     "official_counts": row["official_counts"],
+                    "repair_mode": row.get("repair_mode") or "split_flattened",
                     "preview": True,
                 })
                 self._update_job(
@@ -185,6 +186,7 @@ class TVSeasonRepair(_PluginBase):
                 result = self._post("apply-exact", {
                     "series_rel": key,
                     "official_counts": row["official_counts"],
+                    "repair_mode": row.get("repair_mode") or "split_flattened",
                     "preview": False,
                 })
                 with self._data_lock:
@@ -241,7 +243,6 @@ class TVSeasonRepair(_PluginBase):
             missing_ids = sorted({
                 int(row.get("tmdb_id") or 0) for row in source_rows
                 if int(row.get("tmdb_id") or 0) and str(int(row.get("tmdb_id") or 0)) not in count_cache
-                and len(row.get("seasons") or []) == 1
             })
             # The first full-library scan can contain hundreds of titles.  A
             # small worker pool avoids a several-minute serial TMDB walk while
@@ -264,11 +265,53 @@ class TVSeasonRepair(_PluginBase):
                 if not tmdb_id:
                     continue
                 seasons = row.get("seasons") or []
-                if len(seasons) != 1:
-                    skipped_existing_multiseason += 1
-                    continue
                 official = count_cache.get(str(tmdb_id)) or []
                 if not official:
+                    continue
+                season_map = {int(item.get("season") or 0): item for item in seasons}
+
+                # A previous bad import can coexist with a complete corrected
+                # set, for example S02 E01-E74 plus stale E63-E136.  Detect it
+                # separately so the repair agent can quarantine only the
+                # surplus files after verifying every official episode exists.
+                official_seasons = set(range(1, len(official) + 1))
+                overlay_safe = (
+                    len(seasons) > 1
+                    and set(season_map) == official_seasons
+                    and all(
+                        int(season_map[number].get("min") or 0) == 1
+                        and not (season_map[number].get("missing") or [])
+                        and int(season_map[number].get("max") or 0) >= official[number - 1]
+                        for number in official_seasons
+                    )
+                    and any(
+                        int(season_map[number].get("max") or 0) > official[number - 1]
+                        for number in official_seasons
+                    )
+                )
+                if overlay_safe:
+                    extras = [
+                        f"S{number:02d} 多出 E{official[number - 1] + 1}-"
+                        f"E{int(season_map[number].get('max') or 0)}"
+                        for number in sorted(official_seasons)
+                        if int(season_map[number].get("max") or 0) > official[number - 1]
+                    ]
+                    row["official_counts"] = official
+                    row["official_summary"] = "、".join(
+                        f"S{i:02d}:{count}" for i, count in enumerate(official, 1)
+                    )
+                    row["safe"] = True
+                    row["repair_mode"] = "cleanup_overlay"
+                    row["reason"] = "正确季度已完整，同时存在旧绝对集号：" + "；".join(extras)
+                    row["current_summary"] = "、".join(
+                        f"S{int(x['season']):02d}:{int(x['count'])}集(E{int(x['min'])}-E{int(x['max'])})"
+                        for x in seasons
+                    )
+                    results.append(row)
+                    continue
+
+                if len(seasons) != 1:
+                    skipped_existing_multiseason += 1
                     continue
                 suspicious = []
                 for item in seasons:
@@ -286,6 +329,7 @@ class TVSeasonRepair(_PluginBase):
                     and len(official) > 1
                 )
                 row["official_counts"] = official
+                row["repair_mode"] = "split_flattened"
                 row["official_summary"] = "、".join(f"S{i:02d}:{count}" for i, count in enumerate(official, 1))
                 row["safe"] = safe
                 row["reason"] = "；".join(suspicious)
@@ -338,6 +382,7 @@ class TVSeasonRepair(_PluginBase):
             result = self._post("apply-exact", {
                 "series_rel": key,
                 "official_counts": row["official_counts"],
+                "repair_mode": row.get("repair_mode") or "split_flattened",
                 "preview": not execute,
             })
             if execute:
@@ -388,6 +433,7 @@ class TVSeasonRepair(_PluginBase):
             try:
                 result = self._post("apply-exact", {
                     "series_rel": row["series_rel"], "official_counts": row["official_counts"],
+                    "repair_mode": row.get("repair_mode") or "split_flattened",
                     "preview": not execute,
                 })
                 done.append({"row": row, "result": result})
@@ -493,7 +539,10 @@ class TVSeasonRepair(_PluginBase):
         rows = self.get_data("scan_results") or []
         jobs = self._jobs()
         operations = self.get_data("operation_logs") or []
-        actions = [item for item in (self.get_data("actions") or []) if item.get("mode") == "cloud-root-v2"]
+        actions = [
+            item for item in (self.get_data("actions") or [])
+            if item.get("mode") in {"cloud-root-v2", "cloud-overlay-cleanup-v1"}
+        ]
         message = self.get_data("last_message") or f"[{self._now()}] 尚未扫描；扫描不会修改任何文件。"
 
         def detail_card(title: str, lines: list[str], color: str = "default") -> dict:
