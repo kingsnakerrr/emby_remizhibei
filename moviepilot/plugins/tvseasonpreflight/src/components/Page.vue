@@ -65,7 +65,7 @@ onMounted(loadStatus)
         <VCardText><div class="card-label">自动分季成功</div><div class="count-value">{{ state.success_count || 0 }}</div><div class="card-note">查看成功日志</div><VIcon class="arrow" icon="mdi-chevron-right" /></VCardText>
       </VCard>
       <VCard class="status-card card-skipped" @click="openLogs('skipped')">
-        <VCardText><div class="card-label">安全跳过</div><div class="count-value">{{ state.skipped_count || 0 }}</div><div class="card-note">总数不符、缺集或重复时不修改</div><VIcon class="arrow" icon="mdi-chevron-right" /></VCardText>
+        <VCardText><div class="card-label">安全阻止</div><div class="count-value">{{ state.skipped_count || 0 }}</div><div class="card-note">缺集、重复或同一 TMDB 已入库时停止整理</div><VIcon class="arrow" icon="mdi-chevron-right" /></VCardText>
       </VCard>
       <VCard class="status-card card-logs" @click="openLogs('success')">
         <VCardText><div class="card-label">处理日志</div><div class="count-value">{{ totalLogs }}</div><div class="card-note">成功与安全跳过记录</div><VIcon class="arrow" icon="mdi-chevron-right" /></VCardText>
@@ -78,10 +78,10 @@ onMounted(loadStatus)
       <VCard class="dialog-card">
         <VCardTitle class="dialog-title"><span>入库前分季日志</span><VBtn icon="mdi-close" variant="text" @click="dialogOpen = false" /></VCardTitle>
         <VDivider />
-        <VTabs v-model="logTab" class="log-tabs"><VTab value="success">成功日志（{{ state.success_count || 0 }}）</VTab><VTab value="skipped">安全跳过（{{ state.skipped_count || 0 }}）</VTab></VTabs>
+        <VTabs v-model="logTab" class="log-tabs"><VTab value="success">成功日志（{{ state.success_count || 0 }}）</VTab><VTab value="skipped">安全阻止（{{ state.skipped_count || 0 }}）</VTab></VTabs>
         <VDivider />
         <div v-if="logTab === 'success'" class="dialog-body"><VDataTable :headers="logHeaders" :items="state.success_logs" :items-per-page="20" class="data-table"><template #item.result><span class="success-text">已自动分季</span></template><template #no-data><div class="empty">暂无成功日志</div></template></VDataTable></div>
-        <div v-else class="dialog-body"><VDataTable :headers="logHeaders" :items="state.skipped_logs" :items-per-page="20" class="data-table"><template #item.result><span class="skipped-text">安全跳过</span></template><template #no-data><div class="empty">暂无跳过日志</div></template></VDataTable></div>
+        <div v-else class="dialog-body"><VDataTable :headers="logHeaders" :items="state.skipped_logs" :items-per-page="20" class="data-table"><template #item.result><span class="skipped-text">已阻止</span></template><template #no-data><div class="empty">暂无阻止日志</div></template></VDataTable></div>
       </VCard>
     </VDialog>
   </div>

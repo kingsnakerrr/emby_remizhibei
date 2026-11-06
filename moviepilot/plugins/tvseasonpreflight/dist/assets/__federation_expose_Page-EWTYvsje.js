@@ -193,9 +193,9 @@ return (_ctx, _cache) => {
         default: _withCtx(() => [
           _createVNode(_component_VCardText, null, {
             default: _withCtx(() => [
-              _cache[11] || (_cache[11] = _createElementVNode("div", { class: "card-label" }, "安全跳过", -1)),
+              _cache[11] || (_cache[11] = _createElementVNode("div", { class: "card-label" }, "安全阻止", -1)),
               _createElementVNode("div", _hoisted_6, _toDisplayString(state.value.skipped_count || 0), 1),
-              _cache[12] || (_cache[12] = _createElementVNode("div", { class: "card-note" }, "总数不符、缺集或重复时不修改", -1)),
+              _cache[12] || (_cache[12] = _createElementVNode("div", { class: "card-note" }, "缺集、重复或同一 TMDB 已入库时停止整理", -1)),
               _createVNode(_component_VIcon, {
                 class: "arrow",
                 icon: "mdi-chevron-right"
@@ -276,7 +276,7 @@ return (_ctx, _cache) => {
                 }),
                 _createVNode(_component_VTab, { value: "skipped" }, {
                   default: _withCtx(() => [
-                    _createTextVNode("安全跳过（" + _toDisplayString(state.value.skipped_count || 0) + "）", 1)
+                    _createTextVNode("安全阻止（" + _toDisplayString(state.value.skipped_count || 0) + "）", 1)
                   ]),
                   _: 1
                 })
@@ -309,10 +309,10 @@ return (_ctx, _cache) => {
                     class: "data-table"
                   }, {
                     "item.result": _withCtx(() => [...(_cache[21] || (_cache[21] = [
-                      _createElementVNode("span", { class: "skipped-text" }, "安全跳过", -1)
+                      _createElementVNode("span", { class: "skipped-text" }, "已阻止", -1)
                     ]))]),
                     "no-data": _withCtx(() => [...(_cache[22] || (_cache[22] = [
-                      _createElementVNode("div", { class: "empty" }, "暂无跳过日志", -1)
+                      _createElementVNode("div", { class: "empty" }, "暂无阻止日志", -1)
                     ]))]),
                     _: 1
                   }, 8, ["items"])
@@ -328,6 +328,6 @@ return (_ctx, _cache) => {
 }
 
 };
-const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-2b710cea"]]);
+const Page = /*#__PURE__*/_export_sfc(_sfc_main, [['__scopeId',"data-v-783f022a"]]);
 
 export { Page as default };

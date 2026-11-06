@@ -12,6 +12,8 @@ from pathlib import Path
 
 MARKER = "absolute_episode_map: Dict[int, Tuple[int, int]] = {}"
 TOGGLE_GUARD = 'Path("/config/tvseasonpreflight.disabled").exists()'
+CONFLICT_MARKER = "absolute_episode_conflict: Optional[str] = None"
+MEDIA_SERVER_IMPORT = "from app.db.mediaserver_oper import MediaServerOper"
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -22,6 +24,15 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 
 def patch_source(text: str) -> str:
+    if MEDIA_SERVER_IMPORT not in text:
+        text = replace_once(
+            text,
+            "from app.db.downloadhistory_oper import DownloadHistoryOper\n",
+            "from app.db.downloadhistory_oper import DownloadHistoryOper\n"
+            f"{MEDIA_SERVER_IMPORT}\n",
+            "media server import",
+        )
+
     if MARKER in text:
         if TOGGLE_GUARD not in text:
             text = replace_once(
@@ -34,6 +45,51 @@ def patch_source(text: str) -> str:
                 "            if not mediainfo or mediainfo.type != MediaType.TV:\n",
                 "runtime toggle guard",
             )
+        if CONFLICT_MARKER not in text:
+            text = replace_once(
+                text,
+                f"        {MARKER}\n",
+                f"        {MARKER}\n"
+                "        absolute_episode_conflict: Optional[str] = None\n",
+                "existing-library conflict state",
+            )
+            text = replace_once(
+                text,
+                "            nonlocal absolute_episode_map\n"
+                "            if Path(\"/config/tvseasonpreflight.disabled\").exists():\n",
+                "            nonlocal absolute_episode_map, absolute_episode_conflict\n"
+                "            if Path(\"/config/tvseasonpreflight.disabled\").exists():\n",
+                "existing-library conflict nonlocal",
+            )
+            text = replace_once(
+                text,
+                "            mapping: Dict[int, Tuple[int, int]] = {}\n",
+                "            existing_item = MediaServerOper().exists(\n"
+                "                tmdbid=int(tmdb_id), mtype=MediaType.TV.value\n"
+                "            )\n"
+                "            existing_history = TransferHistoryOper().get_by_type_tmdbid(\n"
+                "                tmdbid=int(tmdb_id), mtype=MediaType.TV.value\n"
+                "            )\n"
+                "            if existing_item or (existing_history and existing_history.status):\n"
+                "                absolute_episode_conflict = (\n"
+                "                    f\"{mediainfo.title_year} 已存在于媒体库；为避免新旧两套季集叠加，\"\n"
+                "                    \"已阻止本次绝对集数全集整理。请先使用旧媒体季度修复助手处理现有媒体。\"\n"
+                "                )\n"
+                "                logger.warning(absolute_episode_conflict)\n"
+                "                return\n\n"
+                "            mapping: Dict[int, Tuple[int, int]] = {}\n",
+                "existing-library guard",
+            )
+            text = replace_once(
+                text,
+                "        _prepare_absolute_episode_remap(file_items)\n\n"
+                "        planned_file_count = len(file_items)\n",
+                "        _prepare_absolute_episode_remap(file_items)\n"
+                "        if absolute_episode_conflict:\n"
+                "            return False, absolute_episode_conflict\n\n"
+                "        planned_file_count = len(file_items)\n",
+                "existing-library conflict abort",
+            )
         return text
 
     text = replace_once(
@@ -42,7 +98,8 @@ def patch_source(text: str) -> str:
         "        matched_episode_format_template = False\n"
         "        # Exact full-series packs may use S01E001..S01E291 absolute numbering.\n"
         "        # Keep ordinary and uncertain transfers unchanged.\n"
-        "        absolute_episode_map: Dict[int, Tuple[int, int]] = {}\n",
+        "        absolute_episode_map: Dict[int, Tuple[int, int]] = {}\n"
+        "        absolute_episode_conflict: Optional[str] = None\n",
         "state marker",
     )
     text = replace_once(
@@ -83,7 +140,7 @@ def patch_source(text: str) -> str:
                 planned_items: List[Tuple[FileItem, bool]]
         ) -> None:
             """Enable remapping only after an exact TMDB-total match."""
-            nonlocal absolute_episode_map
+            nonlocal absolute_episode_map, absolute_episode_conflict
             if Path("/config/tvseasonpreflight.disabled").exists():
                 return
             if not mediainfo or mediainfo.type != MediaType.TV:
@@ -149,6 +206,20 @@ def patch_source(text: str) -> str:
                 )
                 return
 
+            existing_item = MediaServerOper().exists(
+                tmdbid=int(tmdb_id), mtype=MediaType.TV.value
+            )
+            existing_history = TransferHistoryOper().get_by_type_tmdbid(
+                tmdbid=int(tmdb_id), mtype=MediaType.TV.value
+            )
+            if existing_item or (existing_history and existing_history.status):
+                absolute_episode_conflict = (
+                    f"{mediainfo.title_year} 已存在于媒体库；为避免新旧两套季集叠加，"
+                    "已阻止本次绝对集数全集整理。请先使用旧媒体季度修复助手处理现有媒体。"
+                )
+                logger.warning(absolute_episode_conflict)
+                return
+
             mapping: Dict[int, Tuple[int, int]] = {}
             absolute_number = 1
             for season_number in sorted(season_counts):
@@ -175,7 +246,9 @@ def patch_source(text: str) -> str:
         text,
         "        file_items, inherited_meta_map = _plan_file_items(file_items)\n",
         "        file_items, inherited_meta_map = _plan_file_items(file_items)\n"
-        "        _prepare_absolute_episode_remap(file_items)\n",
+        "        _prepare_absolute_episode_remap(file_items)\n"
+        "        if absolute_episode_conflict:\n"
+        "            return False, absolute_episode_conflict\n",
         "activation",
     )
     return text

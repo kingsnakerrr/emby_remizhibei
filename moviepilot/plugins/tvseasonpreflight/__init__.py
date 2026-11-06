@@ -14,7 +14,7 @@ class TVSeasonPreflight(_PluginBase):
     plugin_name = "入库前动漫自动分季"
     plugin_desc = "管理并查看下载完成后、移动上传前的绝对集数自动分季引擎。"
     plugin_icon = "tv.png"
-    plugin_version = "0.2.0"
+    plugin_version = "0.2.1"
     plugin_author = "kingsnakerrr"
     author_url = "https://github.com/kingsnakerrr/emby_remizhibei"
     plugin_config_prefix = "tvseasonpreflight_"
@@ -74,7 +74,11 @@ class TVSeasonPreflight(_PluginBase):
             except Exception:
                 continue
             for line in text.splitlines():
-                if "已严格核验绝对集数全集包" not in line and "疑似绝对集数包" not in line:
+                if not any(marker in line for marker in (
+                    "已严格核验绝对集数全集包",
+                    "疑似绝对集数包",
+                    "已阻止本次绝对集数全集整理",
+                )):
                     continue
                 date_match = date_pattern.search(line)
                 message = line.rsplit(" - ", 1)[-1].strip()
