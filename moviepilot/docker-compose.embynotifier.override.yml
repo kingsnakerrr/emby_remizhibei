@@ -1,0 +1,4 @@
+services:
+  moviepilot:
+    volumes:
+      - /opt/docker-compose/emby-tg-notifier/data:/emby-notifier-data:ro
