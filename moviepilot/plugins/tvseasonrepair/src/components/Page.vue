@@ -3,6 +3,13 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 const props = defineProps({ api: { type: Object, default: () => ({}) } })
 const loading = ref(false)
+const pending = ref(new Set())
+const quarantineDir = ref('')
+const quarantineLoaded = ref(false)
+let statusBusy = false
+const activeJob = item => (state.value.active_jobs || []).find(j => j.series_rel === item.series_rel)
+const rowBusy = item => pending.value.has(item.series_rel) || Boolean(activeJob(item))
+const rowFailure = item => (state.value.failed_jobs || []).find(j => j.series_rel === item.series_rel)?.message || ''
 const message = ref('')
 const error = ref('')
 const dialog = ref('')
@@ -50,19 +57,29 @@ const operationHeaders = [
 ]
 
 async function loadStatus(silent = false) {
+  if (statusBusy) return
+  statusBusy = true
   if (!silent) loading.value = true
   try {
     const response = await props.api.post('plugin/TVSeasonRepair/ui_status', {})
     state.value = unwrap(response) || state.value
+    if (!quarantineLoaded.value) {
+      quarantineDir.value = state.value.quarantine_dir || ''
+      quarantineLoaded.value = true
+    }
     error.value = ''
   } catch (err) {
     error.value = err?.message || '读取状态失败'
   } finally {
+    statusBusy = false
     if (!silent) loading.value = false
   }
 }
 
 async function run(path, payload = {}, successText = '') {
+  const key = path === 'apply' ? payload.series_rel : ''
+  if (key && rowBusy({ series_rel: key })) return
+  if (key) pending.value.add(key)
   loading.value = true
   error.value = ''
   message.value = ''
@@ -75,6 +92,7 @@ async function run(path, payload = {}, successText = '') {
   } catch (err) {
     error.value = err?.message || '操作失败'
   } finally {
+    if (key) pending.value.delete(key)
     loading.value = false
   }
 }
@@ -117,7 +135,7 @@ async function removeOverride(item) {
 
 onMounted(() => {
   loadStatus()
-  timer = window.setInterval(() => loadStatus(true), 10000)
+  timer = window.setInterval(() => loadStatus(true), 3000)
 })
 onUnmounted(() => window.clearInterval(timer))
 </script>
@@ -172,6 +190,12 @@ onUnmounted(() => window.clearInterval(timer))
     </div>
 
     <VAlert type="info" variant="tonal" class="headline">{{ state.headline }}</VAlert>
+    <VCard class="my-4 pa-4">
+      <div class="mb-2">异常文件云盘隔离目录</div>
+      <VTextField v-model="quarantineDir" label="CD2 云盘真实路径（留空使用原隔离目录）" placeholder="/CloudNAS/CloudDrive/GoogleDrive/zero/media/symedia_gd/tvshows_error" hide-details />
+      <div class="my-2">只隔离超出集数的文件，保留分类 / 剧名 / 动作号 / 季目录。不会移动整部正常剧集。请使用 Emby、Symedia 扫描范围之外的目录；/home/symedia_gd 是本地 STRM，不能作为视频隔离路径。</div>
+      <VBtn :disabled="loading || !!state.active_jobs?.length" @click="run('quarantine', { quarantine_dir: quarantineDir })">保存隔离目录</VBtn>
+    </VCard>
 
     <VDialog v-model="dialogOpen" max-width="1240" scrollable>
       <VCard class="dialog-card">
@@ -182,14 +206,16 @@ onUnmounted(() => window.clearInterval(timer))
         <VDivider />
 
         <VCardText v-if="dialog === 'scan'" class="dialog-body">
+          <VAlert v-if="error" type="error" class="mb-3">{{ error }}</VAlert>
+          <VAlert v-if="message" type="info" class="mb-3">{{ message }}</VAlert>
           <VAlert type="info" variant="tonal" class="mb-3">默认使用媒体当前绑定的 TMDB。若它是残缺的重复条目，可映射到正确系列的指定季度；只有找不到正确条目时才使用人工集数。</VAlert>
           <VTextField v-model="scanSearch" prepend-inner-icon="mdi-magnify" label="搜索媒体" variant="outlined" density="comfortable" hide-details class="mb-3" />
           <VDataTable :headers="scanHeaders" :items="state.scan_results" :search="scanSearch" :items-per-page="20" class="data-table">
-            <template #item.status="{ item }"><span :class="item.safe ? 'status-safe' : 'status-manual'">{{ item.safe ? '可安全修复' : '人工核对' }}</span></template>
+            <template #item.status="{ item }"><span :class="item.safe ? 'status-safe' : 'status-manual'">{{ rowBusy(item) ? '处理中' : item.safe ? '可修复' : '人工核对' }}</span><div v-if="activeJob(item)">{{ activeJob(item).message }}</div><div v-else-if="rowFailure(item)" :title="rowFailure(item)">上次失败，详情见失败记录</div></template>
             <template #item.actions="{ item }">
               <div v-if="item.safe" class="table-actions">
-                <VBtn size="small" class="table-preview" @click="run('apply', { series_rel: item.series_rel, execute: false })">预览</VBtn>
-                <VBtn size="small" class="table-fix" @click="run('apply', { series_rel: item.series_rel, execute: true })">修复</VBtn>
+                <VBtn size="small" :disabled="rowBusy(item)" class="table-preview" @click="run('apply', { series_rel: item.series_rel, execute: false })">预览</VBtn>
+                <VBtn size="small" :disabled="rowBusy(item)" :loading="rowBusy(item)" class="table-fix" @click="run('apply', { series_rel: item.series_rel, execute: true })">{{ rowBusy(item) ? '处理中' : '修复' }}</VBtn>
               </div>
               <div v-else class="manual-actions">
                 <span class="reason-text" :title="item.reason">{{ item.reason }}</span>

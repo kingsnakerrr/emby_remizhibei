@@ -1,11 +1,38 @@
 import tempfile
 import unittest
+import os
+from unittest.mock import patch
 from pathlib import Path
 
 from app import season_repair as repair
 
 
 class SeasonRepairTest(unittest.TestCase):
+    def test_quarantine_rejects_local_and_library_paths(self):
+        with patch.dict(os.environ, {'SEASON_REPAIR_COMMON_ROOT': '/cloud-media'}):
+            for value in ['/home/symedia_gd/tvshows_error', '/cloud-media',
+                          '/cloud-media/symedia_gd/tvshows/error', '/cloud-media/symedia_gd']:
+                with self.assertRaises(repair.HTTPException):
+                    repair._quarantine_root(value)
+            self.assertEqual(str(repair._quarantine_root('/cloud-media/symedia_gd/tvshows_error')),
+                             '/cloud-media/symedia_gd/tvshows_error')
+            self.assertEqual(repair._quarantine_root(''), repair.QUARANTINE_ROOT)
+
+    def test_common_mount_move_and_rollback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            common = Path(folder)
+            source = common / 'symedia_gd/tvshows/test.mkv'
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b'test')
+            a = repair.CLOUD_ROOT / 'test.mkv'
+            b = repair.QUARANTINE_ROOT / 'test.mkv'
+            with patch.dict(os.environ, {'SEASON_REPAIR_COMMON_ROOT': folder}):
+                repair._move_cloud(a, b)
+                self.assertFalse(source.exists())
+                self.assertEqual((common / 'quarantine/season-overlay/test.mkv').read_bytes(), b'test')
+                repair._move_cloud(b, a)
+                self.assertEqual(source.read_bytes(), b'test')
+
     def test_notification_suppression_matches_series_and_path(self):
         with tempfile.TemporaryDirectory() as folder:
             base = Path(folder)
@@ -111,6 +138,35 @@ class SeasonRepairTest(unittest.TestCase):
             finally:
                 repair.CLOUD_ROOT = old_cloud
                 repair.QUARANTINE_ROOT = old_quarantine
+
+    def test_overlay_local_cleanup_preserves_unrelated_metadata(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            cloud_series = base / "cloud" / "Overlay (2020) {tmdb-2}"
+            local_series = base / "local" / "Overlay (2020) {tmdb-2}"
+            cloud_season = cloud_series / "Season 1"
+            local_season = local_series / "Season 1"
+            cloud_season.mkdir(parents=True)
+            local_season.mkdir(parents=True)
+
+            source = cloud_season / "Overlay.S01E03.old.mkv"
+            source.write_bytes(b"surplus")
+            (local_series / "poster.jpg").write_bytes(b"poster")
+            (local_season / "Overlay.S01E01-thumb.jpg").write_bytes(b"valid")
+            (local_season / "Overlay.S01E03.old.strm").write_text("old", encoding="utf-8")
+            (local_season / "Overlay.S01E03.old-thumb.jpg").write_bytes(b"old")
+
+            removed = repair._cleanup_local_overlay(
+                local_series,
+                cloud_series,
+                [(source, base / "quarantine" / source.name)],
+            )
+
+            self.assertEqual(2, removed)
+            self.assertTrue((local_series / "poster.jpg").exists())
+            self.assertTrue((local_season / "Overlay.S01E01-thumb.jpg").exists())
+            self.assertFalse((local_season / "Overlay.S01E03.old.strm").exists())
+            self.assertFalse((local_season / "Overlay.S01E03.old-thumb.jpg").exists())
 
     def test_overlay_cleanup_refuses_ambiguous_valid_duplicates(self):
         with tempfile.TemporaryDirectory() as folder:

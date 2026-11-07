@@ -7,6 +7,7 @@ operation creates a local metadata backup and a reversible cloud move manifest.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import secrets
@@ -41,6 +42,27 @@ VIDEO_SUFFIXES = {".mp4", ".mkv", ".ts", ".iso", ".rmvb", ".avi", ".mov", ".mpeg
 CLOUD_MOVE_SUFFIXES = VIDEO_SUFFIXES | (ALLOWED_SUFFIXES - {".strm"})
 SUPPRESSION_FILE = STATE_DIR / "notification_suppressions.json"
 SUPPRESSION_LOCK = threading.Lock()
+
+
+def _cloud_move_path(path: Path) -> Path:
+    """Use one mount for rename, including rollback of legacy manifests."""
+    common = os.getenv("SEASON_REPAIR_COMMON_ROOT", "")
+    if common:
+        for alias, relative in ((CLOUD_ROOT, "symedia_gd/tvshows"),
+                                (QUARANTINE_ROOT, "quarantine/season-overlay")):
+            try:
+                return Path(common) / relative / path.relative_to(alias)
+            except ValueError:
+                continue
+    return path
+
+
+def _move_cloud(source: Path, target: Path) -> None:
+    # Do not use shutil.move: EXDEV fallback would download/copy whole videos.
+    source = _cloud_move_path(source)
+    target = _cloud_move_path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(target)
 
 
 def _token() -> str:
@@ -145,8 +167,33 @@ def _inside_cloud(path: Path) -> Path:
     return _inside(path, CLOUD_ROOT)
 
 
-def _inside_quarantine(path: Path) -> Path:
-    return _inside(path, QUARANTINE_ROOT)
+def _inside_quarantine(path: Path, root: Path | None = None) -> Path:
+    return _inside(path, root or QUARANTINE_ROOT)
+
+
+def _quarantine_root(value: str = "") -> Path:
+    if not value or value == str(QUARANTINE_ROOT):
+        return QUARANTINE_ROOT
+    common = Path(os.environ.get("SEASON_REPAIR_COMMON_ROOT", "/cloud-media"))
+    host_base = CLOUD_STRM_PREFIX.parent.parent
+    path = Path(value)
+    try:
+        path = common / path.relative_to(host_base)
+    except ValueError:
+        pass
+    path = _inside(path, common)
+    media = (common / "symedia_gd/tvshows").resolve()
+    if path == common.resolve() or path == media or media in path.parents or path in media.parents:
+        raise HTTPException(status_code=400, detail="隔离目录不能位于电视剧扫描目录内，也不能是其父目录")
+    return path
+
+
+@router.post("/quarantine-check")
+async def quarantine_check(request: Request):
+    _authorize(request)
+    body = await request.json()
+    path = _quarantine_root(str(body.get("quarantine_dir") or ""))
+    return {"ok": True, "path": str(path)}
 
 
 def _series_path(relative: str) -> Path:
@@ -431,6 +478,35 @@ def _rebuild_local_series(series: Path, cloud_series: Path) -> None:
             shutil.copy2(cloud_file, destination)
 
 
+def _cleanup_local_overlay(
+        series: Path,
+        cloud_series: Path,
+        moves: list[tuple[Path, Path]],
+) -> int:
+    """Remove only local index files belonging to quarantined surplus videos.
+
+    Overlay cleanup already has the correct season layout. Rebuilding the whole
+    local tree here would discard Emby-generated posters, episode thumbnails,
+    NFO files, and other metadata that do not also exist on the cloud mount.
+    """
+    removed = 0
+    video_sources = [source for source, _ in moves
+                     if source.suffix.lower() in VIDEO_SUFFIXES]
+    for source in video_sources:
+        relative = source.relative_to(cloud_series)
+        local_dir = series / relative.parent
+        if not local_dir.is_dir():
+            continue
+        stem = source.stem
+        for candidate in local_dir.iterdir():
+            if not candidate.is_file():
+                continue
+            if candidate.stem == stem or candidate.stem.startswith(f"{stem}-"):
+                candidate.unlink()
+                removed += 1
+    return removed
+
+
 def _restore_local_backup(series: Path, backup: Path) -> None:
     if series.exists():
         shutil.rmtree(series)
@@ -494,6 +570,11 @@ async def apply_exact(request: Request):
     action_id = "preview" if preview else f"{int(time.time())}-{secrets.token_hex(4)}"
     if repair_mode == "cleanup_overlay":
         moves = _build_overlay_cleanup_plan(cloud_series, counts, action_id)
+        quarantine_root = _quarantine_root(str(body.get("quarantine_dir") or ""))
+        moves = [(source, _inside_quarantine(quarantine_root / target.relative_to(QUARANTINE_ROOT), quarantine_root))
+                 for source, target in moves]
+        if any(target.exists() for _, target in moves):
+            raise HTTPException(status_code=409, detail="隔离目标已存在，拒绝覆盖")
         manifest_mode = "cloud-overlay-cleanup-v1"
     else:
         moves = _build_exact_plan(series, cloud_series, counts)
@@ -501,6 +582,7 @@ async def apply_exact(request: Request):
     if preview:
         return {
             "preview": True,
+            "quarantine_dir": str(quarantine_root) if repair_mode == "cleanup_overlay" else "",
             "move_count": len(moves),
             "video_move_count": sum(1 for src, _ in moves if src.suffix.lower() in VIDEO_SUFFIXES),
             "metadata_move_count": sum(1 for src, _ in moves if src.suffix.lower() not in VIDEO_SUFFIXES),
@@ -522,6 +604,7 @@ async def apply_exact(request: Request):
         "backup": str(backup),
         "created_at": time.time(),
         "moves": [{"from": str(a), "to": str(b)} for a, b in moves],
+        "quarantine_dir": str(quarantine_root) if repair_mode == "cleanup_overlay" else "",
     }
     manifest_path = manifest_dir / f"{action_id}.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -532,12 +615,16 @@ async def apply_exact(request: Request):
         symedia_was_running = _symedia_stop()
         for source_path, target_path in moves:
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            source_path.rename(target_path)
+            _move_cloud(source_path, target_path)
             if not target_path.exists():
                 raise RuntimeError(f"CloudDrive2 move was not confirmed: {target_path.name}")
             completed.append((source_path, target_path))
-        _rebuild_local_series(series, cloud_series)
+        if repair_mode == "cleanup_overlay":
+            _cleanup_local_overlay(series, cloud_series, moves)
+        else:
+            _rebuild_local_series(series, cloud_series)
     except Exception as exc:
+        logging.getLogger(__name__).exception("Season repair failed: %s", action_id)
         _remove_notification_suppression(series)
         try:
             _restore_local_backup(series, backup)
@@ -546,7 +633,7 @@ async def apply_exact(request: Request):
         for source_path, target_path in reversed(completed):
             if target_path.exists() and not source_path.exists():
                 source_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.rename(source_path)
+                _move_cloud(target_path, source_path)
         raise HTTPException(status_code=500, detail=f"repair rolled back: {exc}")
     finally:
         if symedia_was_running:
@@ -556,6 +643,7 @@ async def apply_exact(request: Request):
         "ok": True, "mode": manifest_mode, "action_id": action_id, "move_count": len(moves),
         "video_move_count": sum(1 for src, _ in moves if src.suffix.lower() in VIDEO_SUFFIXES),
         "backup": str(backup), "refresh_message": refresh_message,
+        "quarantine_dir": str(quarantine_root) if repair_mode == "cleanup_overlay" else "",
     }
 
 
@@ -575,7 +663,8 @@ async def undo(action_id: str, request: Request):
     backup = Path(manifest["backup"])
     if mode == "cloud-overlay-cleanup-v1":
         moves = [
-            (_inside_cloud(Path(item["from"])), _inside_quarantine(Path(item["to"])))
+            (_inside_cloud(Path(item["from"])), _inside_quarantine(Path(item["to"]),
+              _quarantine_root(manifest.get("quarantine_dir", ""))))
             for item in manifest["moves"]
         ]
     else:
@@ -591,7 +680,7 @@ async def undo(action_id: str, request: Request):
         _register_notification_suppression(series)
         for source_path, target_path in reversed(moves):
             source_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.rename(source_path)
+            _move_cloud(target_path, source_path)
         _restore_local_backup(series, backup)
     finally:
         if symedia_was_running:

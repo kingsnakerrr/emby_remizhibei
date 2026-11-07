@@ -19,7 +19,7 @@ class TVSeasonRepair(_PluginBase):
     plugin_name = "旧媒体季度修复助手"
     plugin_desc = "从网盘源文件根治错误季度，并重建 Symedia/Emby 元数据。"
     plugin_icon = "tv.png"
-    plugin_version = "0.4.3"
+    plugin_version = "0.4.5"
     plugin_author = "kingsnakerrr"
     author_url = "https://github.com/kingsnakerrr/emby_remizhibei"
     plugin_config_prefix = "tvseasonrepair_"
@@ -67,12 +67,20 @@ class TVSeasonRepair(_PluginBase):
     def _post(self, path: str, payload: dict | None = None) -> dict:
         if not self._agent_token:
             raise RuntimeError("请先填写修复端密钥")
+        if path == "apply-exact":
+            payload = dict(payload or {})
+            payload["quarantine_dir"] = self.get_data("quarantine_dir") or ""
         response = httpx.post(
             f"{self._agent_url}/season-repair/{path.lstrip('/')}",
             headers={"Authorization": f"Bearer {self._agent_token}"},
             json=payload or {}, timeout=1800,
         )
-        response.raise_for_status()
+        if response.is_error:
+            try:
+                detail = str(response.json().get("detail") or "")[:1500]
+            except (ValueError, AttributeError):
+                detail = "服务端未返回具体原因，请查看修复服务日志"
+            raise RuntimeError(f"修复服务 HTTP {response.status_code}：{detail}")
         return response.json()
 
     def _jobs(self) -> list[dict]:
@@ -280,7 +288,8 @@ class TVSeasonRepair(_PluginBase):
                     self.save_data("scan_results", [item for item in current_rows
                                                      if item.get("series_rel") != key])
                 message = (f"成功整理：移动 {result['video_move_count']} 个网盘视频并重建本地元素。"
-                           f"动作号 {result['action_id']}。{result.get('refresh_message', '')}")
+                           f"动作号 {result['action_id']}。{result.get('refresh_message', '')}"
+                           f" 隔离目录：{result.get('quarantine_dir') or '不涉及隔离'}")
                 self._update_job(job_id, status="success", message=message,
                                  action_id=result["action_id"])
                 self._set_headline(f"修复成功：{row['name']}，移动 {result['video_move_count']} 个视频。")
@@ -490,7 +499,7 @@ class TVSeasonRepair(_PluginBase):
             job, created = self._queue_job(row)
             if created:
                 self._start_job(job)
-                message = f"已提交后台整理：{row['name']}。关闭再打开插件页可查看实时状态。"
+                message = f"已提交后台整理：{row['name']}。页面自动刷新，执行中禁止重复提交。"
             else:
                 message = f"{row['name']} 已在任务队列中，请勿重复点击。"
             self._set_headline(message)
@@ -516,7 +525,7 @@ class TVSeasonRepair(_PluginBase):
             else:
                 approvals[key] = time.time()
                 self.save_data("preview_approvals", approvals)
-                message = f"预览通过：{row['name']} 将移动 {result['video_move_count']} 个网盘视频、{result['metadata_move_count']} 个网盘元数据文件，然后重建本地元素。"
+                message = f"预览通过：{row['name']} 将移动 {result['video_move_count']} 个网盘视频、{result['metadata_move_count']} 个网盘元数据文件，然后重建本地元素。隔离目录：{result.get('quarantine_dir') or '不涉及隔离'}"
             self._finish_operation(operation["id"], "success", message)
             self._set_headline(message)
             return {"success": True, "message": message, "data": result}
@@ -598,6 +607,17 @@ class TVSeasonRepair(_PluginBase):
             self._set_headline(f"回滚失败：{action_id}，{type(err).__name__}。")
             return {"success": False, "message": message}
 
+    def save_quarantine(self, payload: dict = Body(default={})):
+        if any(j.get("status") in {"queued", "previewing", "running"} for j in self._jobs()):
+            return {"success": False, "message": "有整理任务执行中，请完成后修改隔离目录"}
+        value = str(payload.get("quarantine_dir") or "").strip()
+        try:
+            self._post("quarantine-check", {"quarantine_dir": value})
+            self.save_data("quarantine_dir", value)
+            return {"success": True, "message": "已保存云盘隔离目录，仅影响后续修复；历史文件不会自动搬迁"}
+        except Exception as exc:
+            return {"success": False, "message": str(exc)}
+
     def ui_status(self):
         rows = self.get_data("scan_results") or []
         jobs = self._jobs()
@@ -612,6 +632,7 @@ class TVSeasonRepair(_PluginBase):
         return {
             "success": True,
             "data": {
+                "quarantine_dir": self.get_data("quarantine_dir") or "",
                 "headline": self.get_data("last_message") or "尚未执行扫描。",
                 "summary": {
                     "candidate_count": len(rows),
@@ -639,6 +660,7 @@ class TVSeasonRepair(_PluginBase):
 
     def get_api(self) -> List[Dict[str, Any]]:
         return [
+            {"path": "/quarantine", "endpoint": self.save_quarantine, "methods": ["POST"], "auth": "bear", "summary": "设置云盘隔离目录"},
             {"path": "/ui_status", "endpoint": self.ui_status, "methods": ["POST"], "auth": "bear",
              "summary": "获取季度修复界面状态"},
             {"path": "/scan", "endpoint": self.scan, "methods": ["POST"], "auth": "bear", "summary": "扫描季度异常"},
